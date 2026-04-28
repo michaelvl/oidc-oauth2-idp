@@ -1,5 +1,8 @@
 name: CI and Publish (ko)
 
+env:
+  KO_TAGS: latest,${{ github.sha }}
+
 on:
   pull_request:
   push:
@@ -49,4 +52,4 @@ jobs:
       - name: Publish image with ko
         env:
           KO_DOCKER_REPO: ${{ steps.repo.outputs.value }}
-        run: devbox run ko publish --tags=latest --tags=${{ github.sha }} ./idp-auth-server-go
+        run: devbox run make container

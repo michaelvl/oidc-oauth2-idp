@@ -2,8 +2,12 @@ APP := idp-auth-server-go
 PKG := ./idp-auth-server-go
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
+KO_CONFIG_PATH ?= ./.ko.yaml
+KO_IMPORTPATH ?= ./idp-auth-server-go
+KO_DOCKER_REPO ?= ko.local
+KO_TAGS ?= latest
 
-.PHONY: help tidy fmt lint test build run clean
+.PHONY: help tidy fmt lint test build run container clean
 
 help:
 	@printf "Targets:\n"
@@ -13,6 +17,7 @@ help:
 	@printf "  make test   - run unit tests\n"
 	@printf "  make build  - build server binary\n"
 	@printf "  make run    - run server locally\n"
+	@printf "  make container - publish with ko\n"
 	@printf "  make clean  - remove build artifacts\n"
 
 tidy:
@@ -33,6 +38,9 @@ build:
 
 run:
 	go run $(PKG)
+
+container:
+	KO_CONFIG_PATH=$(KO_CONFIG_PATH) KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish --base-import-paths --tags="$(KO_TAGS)" "$(KO_IMPORTPATH)"
 
 clean:
 	rm -rf $(BIN_DIR)

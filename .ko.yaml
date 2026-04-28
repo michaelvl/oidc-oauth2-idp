@@ -1,0 +1,8 @@
+defaultPlatforms:
+  - linux/amd64
+  - linux/arm64
+
+builds:
+  - id: idp-auth-server-go
+    dir: .
+    main: ./idp-auth-server-go
