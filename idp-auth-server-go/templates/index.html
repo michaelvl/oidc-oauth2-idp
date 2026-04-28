@@ -4,36 +4,37 @@
     <link rel="stylesheet" type="text/css" href="style.css">
   </head>
   <body>
-    <div class="header"><b>Identity Provider / Athorization Server</b></div>
-
-    <h2>Active Sessions</h2>
-
-    {{if .Sessions}}
-      {{range $sessionID, $session := .Sessions}}
-      <div class="framed">
-        <p><b> {{$sessionID}} </b></p>
-        <table>
-          <tr><td>subject:</td><td> {{$session.Subject}} </td></tr>
+    <main class="page">
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 16 16">
+          <path d="M10.561 8.073a3.5 3.5 0 1 0-5.122 0A5 5 0 0 0 3 12.5a.75.75 0 0 0 1.5 0 3.5 3.5 0 1 1 7 0 .75.75 0 0 0 1.5 0 5 5 0 0 0-2.439-4.427M8 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4"></path>
+        </svg>
+      </div>
+      <h1 class="heading">Active Sessions</h1>
+      <div class="card">
+      {{if .Sessions}}
+        {{range $sessionID, $session := .Sessions}}
+        <section class="session">
+          <p class="meta"><strong>{{$sessionID}}</strong></p>
+          <p class="meta">subject: {{$session.Subject}}</p>
           {{range $clientSession := $session.ClientSessions}}
-          <tr><td>client_id:</td><td> {{$clientSession.ClientID}} </td></tr>
-          <tr><td>scope:</td><td> {{$clientSession.Scope}} </td></tr>
+          <p class="meta">client_id: {{$clientSession.ClientID}}</p>
+          <p class="meta">scope: {{$clientSession.Scope}}</p>
             {{if $clientSession.CodeChallengeMethod}}
-            <tr><td>code challenge method:</td><td> {{$clientSession.CodeChallengeMethod}} </td></tr>
-            <tr><td>code challenge:</td><td> {{$clientSession.CodeChallenge}} </td></tr>
+            <p class="meta">code challenge method: {{$clientSession.CodeChallengeMethod}}</p>
+            <p class="meta">code challenge: {{$clientSession.CodeChallenge}}</p>
             {{end}}
           {{end}}
-        </table>
-        <p>
-        <form action="/logout" method="post">
-          <input type="hidden" name="sessionid" value="{{$sessionID}}">
-          <button type="submit">Logout</button>
-        </form>
-        </p>
-      </div>
+          <form action="/logout" method="post">
+            <input type="hidden" name="sessionid" value="{{$sessionID}}">
+            <button class="btn btn-danger" type="submit">Sign out</button>
+          </form>
+        </section>
+        {{end}}
+      {{else}}
+        <p class="meta">No active sessions.</p>
       {{end}}
-    {{else}}
-      No active sessions.
-    {{end}}
-
+      </div>
+    </main>
   </body>
 </html>

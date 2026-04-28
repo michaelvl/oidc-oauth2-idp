@@ -4,24 +4,25 @@
     <link rel="stylesheet" type="text/css" href="style.css">
   </head>
   <body>
-    <div class="header"><b>Identity Provider / Athorization Server</b></div>
-
-    <h2>Step 3: Authorize?</h2>
-
-      <p>Authorize that tokens with the specified scope can be issued to the client.</p>
-
-    <form action="/approve" method="post">
-      <div class="framed">
-        <p>Approve this client?</p>
-        <b><p>{{.ClientID}}</p></b>
-        <p>For these scopes:</p>
-        <b><p>{{.Scope}}</p></b>
-
-        <input type="submit" name="approve" value="Approve">
-        <input type="submit" name="deny" value="Deny">
+    <main class="page">
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 16 16">
+          <path d="M10.561 8.073a3.5 3.5 0 1 0-5.122 0A5 5 0 0 0 3 12.5a.75.75 0 0 0 1.5 0 3.5 3.5 0 1 1 7 0 .75.75 0 0 0 1.5 0 5 5 0 0 0-2.439-4.427M8 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4"></path>
+        </svg>
       </div>
-      <input type="hidden" name="reqid" value="{{.ReqID}}">
-    </form>
+      <h1 class="heading">Authorize</h1>
+      <form class="card" action="/approve" method="post">
+        <p class="meta">Approve this client?</p>
+        <p class="meta"><strong>{{.ClientID}}</strong></p>
+        <p class="meta">For these scopes:</p>
+        <p class="meta"><strong>{{.Scope}}</strong></p>
 
+        <div class="btn-row">
+          <button class="btn btn-primary" type="submit" name="approve">Approve</button>
+          <button class="btn btn-danger" type="submit" name="deny">Deny</button>
+        </div>
+        <input type="hidden" name="reqid" value="{{.ReqID}}">
+      </form>
+    </main>
   </body>
 </html>

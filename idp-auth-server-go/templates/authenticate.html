@@ -4,25 +4,25 @@
     <link rel="stylesheet" type="text/css" href="style.css">
   </head>
   <body>
-    <div class="header"><b>Identity Provider / Athorization Server</b></div>
+    <main class="page">
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 16 16">
+          <path d="M10.561 8.073a3.5 3.5 0 1 0-5.122 0A5 5 0 0 0 3 12.5a.75.75 0 0 0 1.5 0 3.5 3.5 0 1 1 7 0 .75.75 0 0 0 1.5 0 5 5 0 0 0-2.439-4.427M8 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4"></path>
+        </svg>
+      </div>
+      <h1 class="heading">Sign in</h1>
+      <form class="card" action="/login" method="post">
+        <label for="username">Username</label>
+        <input id="username" type="text" name="username" required>
 
-    <h2>Step 2: Authenticate</h2>
+        <label for="password">Password</label>
+        <input id="password" type="password" name="password" required>
 
-    <p>In this step we authorize who we are towards the identity-provider using e.g. username and password.</p>
+        <input type="hidden" name="reqid" value="{{.ReqID}}">
 
-    <p>This identity provider will accept any username you choose. You should use the password 'valid' to perform a succesfull login.</p>
-
-    <form action="/login" method="post">
-      <label for="username"><b>Username</b></label>
-      <input type="text" placeholder="Enter Username" name="username" required>
-
-      <label for="password"><b>Password</b></label>
-      <input type="password" placeholder="Enter Password" name="password" required>
-
-      <input type="hidden" name="reqid" value="{{.ReqID}}">
-
-      <input type="submit" name="login" value="Login">
-    </form>
-
+        <button class="btn btn-primary" type="submit" name="login">Sign in</button>
+      </form>
+      <p class="muted">Use password <strong>valid</strong> to sign in.</p>
+    </main>
   </body>
 </html>
