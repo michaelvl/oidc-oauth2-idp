@@ -120,9 +120,9 @@ func TestIssueAndDecodeToken(t *testing.T) {
 	}
 
 	srv := &server{
-		ownBaseURL: "http://127.0.0.1:5001",
-		privateKey: key,
-		publicKey:  &key.PublicKey,
+		externalURL: "http://127.0.0.1:5001",
+		privateKey:  key,
+		publicKey:   &key.PublicKey,
 	}
 
 	tok, err := srv.issueToken("alice", []string{"api", "userinfo"}, map[string]any{
@@ -171,9 +171,9 @@ func TestDecodeJWTRejectsWrongKey(t *testing.T) {
 	}
 
 	srv := &server{
-		ownBaseURL: "http://127.0.0.1:5001",
-		privateKey: keyA,
-		publicKey:  &keyA.PublicKey,
+		externalURL: "http://127.0.0.1:5001",
+		privateKey:  keyA,
+		publicKey:   &keyA.PublicKey,
 	}
 
 	tok, err := srv.issueToken("alice", []string{"api"}, map[string]any{}, time.Now().Add(5*time.Minute))
@@ -223,5 +223,49 @@ func TestDecodeJWTRejectsMalformedToken(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "token") {
 		t.Fatalf("expected token-related error, got %v", err)
+	}
+}
+
+func TestDedupeStrings(t *testing.T) {
+	t.Parallel()
+
+	got := dedupeStrings([]string{"a", "b", "a", "c", "b"})
+	want := []string{"a", "b", "c"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected dedupe result: got=%v want=%v", got, want)
+	}
+}
+
+func TestDualInternalExternalAudience(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	srv := &server{
+		externalURL: "http://localhost:5001",
+		internalURL: "http://idp:5001",
+		privateKey:  key,
+		publicKey:   &key.PublicKey,
+	}
+
+	audience := dedupeStrings([]string{srv.externalURL + "/token", srv.internalURL + "/token"})
+	tok, err := srv.issueToken("alice", audience, map[string]any{"token_use": "refresh"}, time.Now().Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	claims, err := srv.decodeJWT(tok, srv.publicKey)
+	if err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+
+	if !audContainsAny(claims, []string{srv.externalURL + "/token"}) {
+		t.Fatalf("expected external audience match")
+	}
+	if !audContainsAny(claims, []string{srv.internalURL + "/token"}) {
+		t.Fatalf("expected internal audience match")
 	}
 }

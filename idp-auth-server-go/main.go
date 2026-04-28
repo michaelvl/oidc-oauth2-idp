@@ -69,10 +69,11 @@ type server struct {
 
 	templates map[string]*template.Template
 
-	jwtKeyPath string
-	appPort    string
-	ownBaseURL string
-	apiBaseURL string
+	jwtKeyPath  string
+	appPort     string
+	externalURL string
+	internalURL string
+	apiBaseURL  string
 
 	accessTokenLifetime  int
 	refreshTokenLifetime int
@@ -136,7 +137,8 @@ func main() {
 func newServer() (*server, error) {
 	jwtKeyPath := getenvDefault("JWT_KEY", "jwt-key")
 	appPort := getenvDefault("APP_PORT", "5001")
-	ownBaseURL := getenvDefault("APP_BASE_URL", "http://127.0.0.1:5001")
+	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
+	internalURL := getenvDefault("IDP_INTERNAL_URL", externalURL)
 	apiBaseURL := getenvDefault("API_BASE_URL", "http://127.0.0.1:5002/api")
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
@@ -159,7 +161,8 @@ func newServer() (*server, error) {
 		templates:            templates,
 		jwtKeyPath:           jwtKeyPath,
 		appPort:              appPort,
-		ownBaseURL:           ownBaseURL,
+		externalURL:          externalURL,
+		internalURL:          internalURL,
 		apiBaseURL:           apiBaseURL,
 		accessTokenLifetime:  accessLifetime,
 		refreshTokenLifetime: refreshLifetime,
@@ -235,7 +238,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	delete(s.sessions, sessionID)
 	s.mu.Unlock()
 
-	http.Redirect(w, r, s.ownBaseURL, http.StatusSeeOther)
+	http.Redirect(w, r, s.externalURL, http.StatusSeeOther)
 }
 
 func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
@@ -283,7 +286,7 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("ID token hint claims: %v", idTokenClaims)
-		if !audContains(idTokenClaims, s.ownBaseURL) {
+		if !audContainsAny(idTokenClaims, []string{s.externalURL, s.internalURL}) {
 			log.Printf("ID token hint not for us")
 			redirURL := buildURL(redirectURI, map[string]string{"error": "login_required", "state": state})
 			http.Redirect(w, r, redirURL, http.StatusSeeOther)
@@ -557,7 +560,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("GET-TOKEN: Issuing tokens!")
-	accessToken, err := s.issueToken(subject, []string{s.apiBaseURL, s.ownBaseURL + "/userinfo"}, map[string]any{
+	accessAud := dedupeStrings([]string{s.apiBaseURL, s.externalURL + "/userinfo", s.internalURL + "/userinfo"})
+	accessToken, err := s.issueToken(subject, accessAud, map[string]any{
 		"token_use": "access",
 		"scope":     scope,
 	}, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
@@ -566,7 +570,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refreshToken, err := s.issueToken(subject, []string{s.ownBaseURL + "/token"}, map[string]any{
+	refreshAud := dedupeStrings([]string{s.externalURL + "/token", s.internalURL + "/token"})
+	refreshToken, err := s.issueToken(subject, refreshAud, map[string]any{
 		"client_id":              clientID,
 		"session_id":             sessionID,
 		"access_token_lifetime":  accessLifetime,
@@ -598,7 +603,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		idToken, err := s.issueToken(subject, []string{clientID, s.ownBaseURL}, claims, time.Now().UTC().Add(60*time.Minute))
+		idToken, err := s.issueToken(subject, []string{clientID, s.externalURL}, claims, time.Now().UTC().Add(60*time.Minute))
 		if err != nil {
 			http.Error(w, "token issue error", http.StatusInternalServerError)
 			return
@@ -668,7 +673,7 @@ func (s *server) endsession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !audContains(claims, s.ownBaseURL) {
+	if !audContainsAny(claims, []string{s.externalURL, s.internalURL}) {
 		log.Printf("END-SESSION: ID token hint not for us")
 		renderTemplate(w, s.templates["error"], errorData{Text: "ID token not for us"})
 		return
@@ -738,12 +743,12 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config := map[string]any{
-		"issuer":                 s.ownBaseURL,
-		"authorization_endpoint": s.ownBaseURL + "/authorize",
-		"token_endpoint":         s.ownBaseURL + "/token",
-		"userinfo_endpoint":      s.ownBaseURL + "/userinfo",
-		"jwks_uri":               s.ownBaseURL + "/.well-known/jwks.json",
-		"end_session_endpoint":   s.ownBaseURL + "/endsession",
+		"issuer":                 s.externalURL,
+		"authorization_endpoint": s.externalURL + "/authorize",
+		"token_endpoint":         s.externalURL + "/token",
+		"userinfo_endpoint":      s.externalURL + "/userinfo",
+		"jwks_uri":               s.externalURL + "/.well-known/jwks.json",
+		"end_session_endpoint":   s.externalURL + "/endsession",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -756,7 +761,7 @@ func (s *server) issueToken(subject string, audience []string, claims map[string
 		allClaims[k] = v
 	}
 	allClaims["sub"] = subject
-	allClaims["iss"] = s.ownBaseURL
+	allClaims["iss"] = s.externalURL
 	allClaims["aud"] = audience
 	allClaims["iat"] = time.Now().UTC().Unix()
 	allClaims["exp"] = expiry.UTC().Unix()
@@ -914,6 +919,28 @@ func audContains(claims map[string]any, want string) bool {
 		}
 	}
 	return false
+}
+
+func audContainsAny(claims map[string]any, wants []string) bool {
+	for _, want := range wants {
+		if audContains(claims, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func dedupeStrings(in []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func intFromAny(v any, def int) int {
