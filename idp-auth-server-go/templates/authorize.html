@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <div class="header"><b>Identity Provider / Athorization Server</b></div>
+
+    <h2>Step 3: Authorize?</h2>
+
+      <p>Authorize that tokens with the specified scope can be issued to the client.</p>
+
+    <form action="/approve" method="post">
+      <div class="framed">
+        <p>Approve this client?</p>
+        <b><p>{{.ClientID}}</p></b>
+        <p>For these scopes:</p>
+        <b><p>{{.Scope}}</p></b>
+
+        <input type="submit" name="approve" value="Approve">
+        <input type="submit" name="deny" value="Deny">
+      </div>
+      <input type="hidden" name="reqid" value="{{.ReqID}}">
+    </form>
+
+  </body>
+</html>

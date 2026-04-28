@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <div class="header"><b>Identity Provider / Athorization Server</b></div>
+
+    <h2>End Session</h2>
+
+    <p>Logout {{.Subject}}?</p>
+
+    <form action="/endsession-approve" method="post">
+      <input type="hidden" name="sessionid" value="{{.SessionID}}">
+      <input type="hidden" name="redirurl" value="{{.RedirURL}}">
+      <button type="submit">Logout</button>
+    </form>
+
+  </body>
+</html>

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <div class="header"><b>Identity Provider / Athorization Server</b></div>
+
+    <h2>Active Sessions</h2>
+
+    {{if .Sessions}}
+      {{range $sessionID, $session := .Sessions}}
+      <div class="framed">
+        <p><b> {{$sessionID}} </b></p>
+        <table>
+          <tr><td>subject:</td><td> {{$session.Subject}} </td></tr>
+          {{range $clientSession := $session.ClientSessions}}
+          <tr><td>client_id:</td><td> {{$clientSession.ClientID}} </td></tr>
+          <tr><td>scope:</td><td> {{$clientSession.Scope}} </td></tr>
+            {{if $clientSession.CodeChallengeMethod}}
+            <tr><td>code challenge method:</td><td> {{$clientSession.CodeChallengeMethod}} </td></tr>
+            <tr><td>code challenge:</td><td> {{$clientSession.CodeChallenge}} </td></tr>
+            {{end}}
+          {{end}}
+        </table>
+        <p>
+        <form action="/logout" method="post">
+          <input type="hidden" name="sessionid" value="{{$sessionID}}">
+          <button type="submit">Logout</button>
+        </form>
+        </p>
+      </div>
+      {{end}}
+    {{else}}
+      No active sessions.
+    {{end}}
+
+  </body>
+</html>
