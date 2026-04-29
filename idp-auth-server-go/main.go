@@ -65,7 +65,7 @@ type server struct {
 	codeMeta    map[string]codeMetadataEntry
 	sessions    map[string]session
 
-	templates map[string]*template.Template
+	templates    map[string]*template.Template
 	templatesDir string
 
 	appPort     string
@@ -281,12 +281,6 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("ID token hint claims: %v", idTokenClaims)
-		if !audContainsAny(idTokenClaims, []string{s.externalURL}) {
-			log.Printf("ID token hint not for us")
-			redirURL := buildURL(redirectURI, map[string]string{"error": "login_required", "state": state})
-			http.Redirect(w, r, redirURL, http.StatusSeeOther)
-			return
-		}
 
 		subject, _ := idTokenClaims["sub"].(string)
 		s.mu.Lock()
@@ -452,7 +446,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	switch grantType {
 	case "authorization_code":
 		code := r.Form.Get("code")
-		_ = r.Form.Get("redirection_uri")
+		_ = r.Form.Get("redirect_uri")
 		codeVerifier := r.Form.Get("code_verifier")
 
 		s.mu.Lock()
@@ -464,8 +458,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 		if !ok {
 			log.Printf("GET-TOKEN: Invalid code: '%s'", code)
-			w.WriteHeader(http.StatusForbidden)
-			renderTemplate(w, s.templates["error"], errorData{Text: "Invalid code"})
+			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 			return
 		}
 
@@ -478,14 +471,14 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		sess, ok := s.sessions[sessionID]
 		s.mu.Unlock()
 		if !ok {
-			http.Error(w, "error=invalid_grant", http.StatusForbidden)
+			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 			return
 		}
 
 		subject = sess.Subject
 		clientSess := getClientSessionByID(sess, clientID)
 		if clientSess == nil {
-			http.Error(w, "error=invalid_grant", http.StatusForbidden)
+			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 			return
 		}
 
@@ -494,7 +487,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			switch clientSess.CodeChallengeMethod {
 			case "plain":
 				if codeVerifier != clientSess.CodeChallenge {
-					http.Error(w, "error=invalid_grant", http.StatusForbidden)
+					writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 					return
 				}
 			case "S256":
@@ -502,11 +495,11 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 				ourCodeChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
 				log.Printf("Self-encoded challenge '%s', got challenge '%s'", ourCodeChallenge, clientSess.CodeChallenge)
 				if ourCodeChallenge != clientSess.CodeChallenge {
-					http.Error(w, "error=invalid_grant", http.StatusForbidden)
+					writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 					return
 				}
 			default:
-				http.Error(w, "error=invalid_grant", http.StatusForbidden)
+				writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 				return
 			}
 		}
@@ -521,7 +514,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 		refreshClaims, err := s.decodeJWT(refreshToken, s.publicKey)
 		if err != nil {
-			http.Error(w, "error=invalid_grant", http.StatusUnauthorized)
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
 			return
 		}
 
@@ -531,7 +524,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		if !ok {
 			log.Printf("GET-TOKEN: Invalid session, cannot refresh tokens: '%s'", sessionID)
-			http.Error(w, "error=invalid_grant", http.StatusUnauthorized)
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
 			return
 		}
 
@@ -544,7 +537,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		log.Printf("GET-TOKEN: Invalid grant type: '%s'", grantType)
-		w.WriteHeader(http.StatusBadRequest)
+		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type")
 		return
 	}
 
@@ -583,16 +576,16 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	if strings.Contains(scope, "openid") {
 		claims := map[string]any{}
+		if nonce != "" {
+			claims["nonce"] = nonce
+		}
+		claims["azp"] = clientID
 		if strings.Contains(scope, "profile") {
 			claims["name"] = fmt.Sprintf("Name of user %s", capitalize(subject))
 			claims["preferred_username"] = capitalize(subject)
-			claims["azp"] = clientID
-			if nonce != "" {
-				claims["nonce"] = nonce
-			}
 		}
 
-		idToken, err := s.issueToken(subject, []string{clientID, s.externalURL}, claims, time.Now().UTC().Add(60*time.Minute))
+		idToken, err := s.issueToken(subject, []string{clientID}, claims, time.Now().UTC().Add(60*time.Minute))
 		if err != nil {
 			http.Error(w, "token issue error", http.StatusInternalServerError)
 			return
@@ -605,7 +598,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
 	}
@@ -631,8 +624,9 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	log.Printf("GET-USERINFO: Scope '%s'", scope)
 
 	out := map[string]any{}
+	sub, _ := claims["sub"].(string)
+	out["sub"] = sub
 	if strings.Contains(scope, "profile") {
-		sub, _ := claims["sub"].(string)
 		out["name"] = fmt.Sprintf("Name of user is %s", capitalize(sub))
 	}
 
@@ -652,12 +646,6 @@ func (s *server) endsession(w http.ResponseWriter, r *http.Request) {
 
 	claims, err := s.decodeJWT(idTokenHint, s.publicKey)
 	if err != nil {
-		renderTemplate(w, s.templates["error"], errorData{Text: "ID token not for us"})
-		return
-	}
-
-	if !audContainsAny(claims, []string{s.externalURL}) {
-		log.Printf("END-SESSION: ID token hint not for us")
 		renderTemplate(w, s.templates["error"], errorData{Text: "ID token not for us"})
 		return
 	}
@@ -726,12 +714,18 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config := map[string]any{
-		"issuer":                 s.externalURL,
-		"authorization_endpoint": s.externalURL + "/authorize",
-		"token_endpoint":         s.externalURL + "/token",
-		"userinfo_endpoint":      s.externalURL + "/userinfo",
-		"jwks_uri":               s.externalURL + "/.well-known/jwks.json",
-		"end_session_endpoint":   s.externalURL + "/endsession",
+		"issuer":                                s.externalURL,
+		"authorization_endpoint":                s.externalURL + "/authorize",
+		"token_endpoint":                        s.externalURL + "/token",
+		"userinfo_endpoint":                     s.externalURL + "/userinfo",
+		"jwks_uri":                              s.externalURL + "/.well-known/jwks.json",
+		"end_session_endpoint":                  s.externalURL + "/endsession",
+		"response_types_supported":              []string{"code"},
+		"subject_types_supported":               []string{"public"},
+		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"scopes_supported":                      []string{"openid", "profile"},
+		"token_endpoint_auth_methods_supported": []string{"none"},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -777,6 +771,12 @@ func (s *server) decodeJWT(token string, key *rsa.PublicKey) (map[string]any, er
 		out[k] = v
 	}
 	return out, nil
+}
+
+func writeOAuthError(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
 
 func buildURL(base string, params map[string]string) string {
