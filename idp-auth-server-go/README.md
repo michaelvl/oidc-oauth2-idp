@@ -37,8 +37,6 @@ Login accepts any username and requires password `valid`.
   - HTTP listen port.
 - `IDP_EXTERNAL_URL` (default: `http://127.0.0.1:5001`)
   - Public issuer URL used in discovery and token `iss` claims.
-- `IDP_INTERNAL_URL` (default: value of `IDP_EXTERNAL_URL`)
-  - Internal URL accepted in audience checks and included in token audiences.
 - `API_BASE_URL` (default: `http://127.0.0.1:5002/api`)
   - API audience used when issuing access tokens.
 - `ACCESS_TOKEN_LIFETIME` (default: `1200`)
