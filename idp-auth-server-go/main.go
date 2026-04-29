@@ -4,10 +4,8 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"html/template"
@@ -68,8 +66,8 @@ type server struct {
 	sessions    map[string]session
 
 	templates map[string]*template.Template
+	templatesDir string
 
-	jwtKeyPath  string
 	appPort     string
 	externalURL string
 	internalURL string
@@ -135,7 +133,6 @@ func main() {
 }
 
 func newServer() (*server, error) {
-	jwtKeyPath := getenvDefault("JWT_KEY", "jwt-key")
 	appPort := getenvDefault("APP_PORT", "5001")
 	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
 	internalURL := getenvDefault("IDP_INTERNAL_URL", externalURL)
@@ -144,12 +141,13 @@ func newServer() (*server, error) {
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
 	log.Printf("Generate keys")
-	privateKey, publicKey, err := generateAndWriteKeys(jwtKeyPath)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
 	}
 
-	templates, err := loadTemplates(filepath.Join("idp-auth-server-go", "templates"))
+	templatesDir := getenvDefault("TEMPLATES_DIR", filepath.Join(getenvDefault("KO_DATA_PATH", filepath.Join("idp-auth-server-go", "kodata")), "templates"))
+	templates, err := loadTemplates(templatesDir)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +157,7 @@ func newServer() (*server, error) {
 		codeMeta:             map[string]codeMetadataEntry{},
 		sessions:             map[string]session{},
 		templates:            templates,
-		jwtKeyPath:           jwtKeyPath,
+		templatesDir:         templatesDir,
 		appPort:              appPort,
 		externalURL:          externalURL,
 		internalURL:          internalURL,
@@ -167,7 +165,7 @@ func newServer() (*server, error) {
 		accessTokenLifetime:  accessLifetime,
 		refreshTokenLifetime: refreshLifetime,
 		privateKey:           privateKey,
-		publicKey:            publicKey,
+		publicKey:            &privateKey.PublicKey,
 	}, nil
 }
 
@@ -222,7 +220,7 @@ func (s *server) styleCSS(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	http.ServeFile(w, r, filepath.Join("idp-auth-server-go", "templates", "style.css"))
+	http.ServeFile(w, r, filepath.Join(s.templatesDir, "style.css"))
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -524,13 +522,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		refreshToken := r.Form.Get("refresh_token")
 		log.Printf("GET-TOKEN: Refresh token %s", refreshToken)
 
-		pubKey, err := readPublicKey("jwt-key.pub")
-		if err != nil {
-			http.Error(w, "error=invalid_grant", http.StatusUnauthorized)
-			return
-		}
-
-		refreshClaims, err := s.decodeJWT(refreshToken, pubKey)
+		refreshClaims, err := s.decodeJWT(refreshToken, s.publicKey)
 		if err != nil {
 			http.Error(w, "error=invalid_grant", http.StatusUnauthorized)
 			return
@@ -631,13 +623,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pubKey, err := readPublicKey("jwt-key.pub")
-	if err != nil {
-		renderTemplate(w, s.templates["error"], errorData{Text: "Invalid authorization"})
-		return
-	}
-
-	claims, err := s.decodeJWT(parts[1], pubKey)
+	claims, err := s.decodeJWT(parts[1], s.publicKey)
 	if err != nil {
 		renderTemplate(w, s.templates["error"], errorData{Text: "Invalid authorization"})
 		return
@@ -794,50 +780,6 @@ func (s *server) decodeJWT(token string, key *rsa.PublicKey) (map[string]any, er
 		out[k] = v
 	}
 	return out, nil
-}
-
-func readPublicKey(path string) (*rsa.PublicKey, error) {
-	pubData, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(pubData)
-	if block == nil {
-		return nil, errors.New("failed to decode PEM")
-	}
-	pubAny, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	pubKey, ok := pubAny.(*rsa.PublicKey)
-	if !ok {
-		return nil, errors.New("public key is not RSA")
-	}
-	return pubKey, nil
-}
-
-func generateAndWriteKeys(basePath string) (*rsa.PrivateKey, *rsa.PublicKey, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	privDER := x509.MarshalPKCS1PrivateKey(priv)
-	privPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: privDER})
-	if err := os.WriteFile(basePath, privPEM, 0o600); err != nil {
-		return nil, nil, err
-	}
-
-	pubDER, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
-	if err != nil {
-		return nil, nil, err
-	}
-	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pubDER})
-	if err := os.WriteFile(basePath+".pub", pubPEM, 0o644); err != nil {
-		return nil, nil, err
-	}
-
-	return priv, &priv.PublicKey, nil
 }
 
 func buildURL(base string, params map[string]string) string {

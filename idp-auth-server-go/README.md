@@ -29,8 +29,10 @@ Login accepts any username and requires password `valid`.
 
 ## Environment variables
 
-- `JWT_KEY` (default: `jwt-key`)
-  - File path prefix used for generated RSA keys (`jwt-key` and `jwt-key.pub`).
+- `TEMPLATES_DIR` (default: `$KO_DATA_PATH/templates`)
+  - Template/static directory used at runtime. Override this to point at a bind-mounted directory in containers.
+- `KO_DATA_PATH` (default fallback for local runs: `idp-auth-server-go/kodata`)
+  - Used to derive the default templates path when `TEMPLATES_DIR` is not set.
 - `APP_PORT` (default: `5001`)
   - HTTP listen port.
 - `IDP_EXTERNAL_URL` (default: `http://127.0.0.1:5001`)
@@ -54,6 +56,13 @@ From repo root:
 - `make build` - build binary to `bin/idp-auth-server-go`
 - `make container` - publish container image with `ko`
   - Defaults to `KO_DOCKER_REPO=ko.local`
+
+## Templates in ko containers
+
+The server loads templates from `TEMPLATES_DIR`.
+
+- In ko-published images, templates are included from `idp-auth-server-go/kodata/templates` and available via `$KO_DATA_PATH/templates`.
+- To override templates at runtime, bind-mount a directory and set `TEMPLATES_DIR` to that mount path.
 
 ## Container publishing
 
