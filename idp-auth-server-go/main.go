@@ -33,6 +33,8 @@ type clientSession struct {
 	RedirectURI         string
 	CodeChallenge       string
 	CodeChallengeMethod string
+	IDTokenClaims       map[string]any
+	AccessTokenClaims   map[string]any
 }
 
 type session struct {
@@ -80,7 +82,22 @@ type server struct {
 }
 
 type indexData struct {
-	Sessions map[string]session
+	Sessions []sessionView
+}
+
+type sessionView struct {
+	SessionID      string
+	Subject        string
+	ClientSessions []clientSessionView
+}
+
+type clientSessionView struct {
+	ClientID              string
+	Scope                 string
+	CodeChallenge         string
+	CodeChallengeMethod   string
+	IDTokenClaimsJSON     string
+	AccessTokenClaimsJSON string
 }
 
 type authenticateData struct {
@@ -88,9 +105,12 @@ type authenticateData struct {
 }
 
 type authorizeData struct {
-	ClientID string
-	Scope    string
-	ReqID    string
+	ClientID              string
+	Scope                 string
+	ReqID                 string
+	IDTokenClaimsJSON     string
+	AccessTokenClaimsJSON string
+	ErrorText             string
 }
 
 type endsessionData struct {
@@ -206,7 +226,34 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
-	data := indexData{Sessions: s.sessions}
+	views := make([]sessionView, 0, len(s.sessions))
+	for sessionID, sess := range s.sessions {
+		clientViews := make([]clientSessionView, 0, len(sess.ClientSessions))
+		for _, clientSess := range sess.ClientSessions {
+			idTokenClaimsJSON, err := claimsToPrettyJSON(clientSess.IDTokenClaims)
+			if err != nil {
+				idTokenClaimsJSON = "{}"
+			}
+			accessTokenClaimsJSON, err := claimsToPrettyJSON(clientSess.AccessTokenClaims)
+			if err != nil {
+				accessTokenClaimsJSON = "{}"
+			}
+			clientViews = append(clientViews, clientSessionView{
+				ClientID:              clientSess.ClientID,
+				Scope:                 clientSess.Scope,
+				CodeChallenge:         clientSess.CodeChallenge,
+				CodeChallengeMethod:   clientSess.CodeChallengeMethod,
+				IDTokenClaimsJSON:     idTokenClaimsJSON,
+				AccessTokenClaimsJSON: accessTokenClaimsJSON,
+			})
+		}
+		views = append(views, sessionView{
+			SessionID:      sessionID,
+			Subject:        sess.Subject,
+			ClientSessions: clientViews,
+		})
+	}
+	data := indexData{Sessions: views}
 	s.mu.Unlock()
 
 	renderTemplate(w, s.templates["index"], data)
@@ -338,8 +385,25 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	s.authContext[reqID] = ctx
 	s.mu.Unlock()
 
+	idTokenClaimsJSON, err := claimsToPrettyJSON(defaultIDTokenClaims(subject, ctx.Scope, ctx.ClientID, ctx.Nonce))
+	if err != nil {
+		http.Error(w, "claims serialization error", http.StatusInternalServerError)
+		return
+	}
+	accessTokenClaimsJSON, err := claimsToPrettyJSON(defaultAccessTokenClaims(subject, ctx.Scope))
+	if err != nil {
+		http.Error(w, "claims serialization error", http.StatusInternalServerError)
+		return
+	}
+
 	log.Printf("LOGIN: Requesting authorization. Scope: '%s', client-id: '%s', state: %s, using request id: %s", ctx.Scope, ctx.ClientID, ctx.State, reqID)
-	renderTemplate(w, s.templates["authorize"], authorizeData{ClientID: ctx.ClientID, Scope: ctx.Scope, ReqID: reqID})
+	renderTemplate(w, s.templates["authorize"], authorizeData{
+		ClientID:              ctx.ClientID,
+		Scope:                 ctx.Scope,
+		ReqID:                 reqID,
+		IDTokenClaimsJSON:     idTokenClaimsJSON,
+		AccessTokenClaimsJSON: accessTokenClaimsJSON,
+	})
 }
 
 func (s *server) approve(w http.ResponseWriter, r *http.Request) {
@@ -366,6 +430,33 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	idTokenClaimsJSON := r.Form.Get("id_token_claims_json")
+	accessTokenClaimsJSON := r.Form.Get("access_token_claims_json")
+	idTokenClaims, err := parseClaimsJSON(idTokenClaimsJSON)
+	if err != nil {
+		renderTemplate(w, s.templates["authorize"], authorizeData{
+			ClientID:              ctx.ClientID,
+			Scope:                 ctx.Scope,
+			ReqID:                 reqID,
+			IDTokenClaimsJSON:     idTokenClaimsJSON,
+			AccessTokenClaimsJSON: accessTokenClaimsJSON,
+			ErrorText:             "ID token claims must be valid JSON object",
+		})
+		return
+	}
+	accessTokenClaims, err := parseClaimsJSON(accessTokenClaimsJSON)
+	if err != nil {
+		renderTemplate(w, s.templates["authorize"], authorizeData{
+			ClientID:              ctx.ClientID,
+			Scope:                 ctx.Scope,
+			ReqID:                 reqID,
+			IDTokenClaimsJSON:     idTokenClaimsJSON,
+			AccessTokenClaimsJSON: accessTokenClaimsJSON,
+			ErrorText:             "Access token claims must be valid JSON object",
+		})
+		return
+	}
+
 	s.mu.Lock()
 	delete(s.authContext, reqID)
 	existingSessionID := s.getSessionBySubjectLocked(subject)
@@ -373,15 +464,17 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}
-	sess := session{
-		Subject:   subject,
-		SessionID: sessionID,
+		sess := session{
+			Subject:   subject,
+			SessionID: sessionID,
 		ClientSessions: []clientSession{{
 			ClientID:            ctx.ClientID,
 			Scope:               ctx.Scope,
 			RedirectURI:         ctx.RedirectURI,
 			CodeChallenge:       ctx.CodeChallenge,
 			CodeChallengeMethod: ctx.CodeChallengeMethod,
+			IDTokenClaims:       idTokenClaims,
+			AccessTokenClaims:   accessTokenClaims,
 		}},
 	}
 	s.sessions[sessionID] = sess
@@ -439,6 +532,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		clientID        string
 		sessionID       string
 		nonce           string
+		idTokenClaims   map[string]any
+		accessClaims    map[string]any
 		accessLifetime  int
 		refreshLifetime int
 	)
@@ -505,6 +600,14 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		}
 
 		scope = clientSess.Scope
+		idTokenClaims = clientSess.IDTokenClaims
+		if idTokenClaims == nil {
+			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce)
+		}
+		accessClaims = clientSess.AccessTokenClaims
+		if accessClaims == nil {
+			accessClaims = defaultAccessTokenClaims(subject, scope)
+		}
 		accessLifetime = s.accessTokenLifetime
 		refreshLifetime = s.refreshTokenLifetime
 
@@ -519,8 +622,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		}
 
 		sessionID, _ = refreshClaims["session_id"].(string)
+		clientID, _ = refreshClaims["client_id"].(string)
 		s.mu.Lock()
-		_, ok := s.sessions[sessionID]
+		sess, ok := s.sessions[sessionID]
 		s.mu.Unlock()
 		if !ok {
 			log.Printf("GET-TOKEN: Invalid session, cannot refresh tokens: '%s'", sessionID)
@@ -528,10 +632,23 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		clientSess := getClientSessionByID(sess, clientID)
+		if clientSess == nil {
+			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
+			return
+		}
+
 		subject, _ = refreshClaims["sub"].(string)
-		scope, _ = refreshClaims["scope"].(string)
-		clientID, _ = refreshClaims["client_id"].(string)
+		scope = clientSess.Scope
 		nonce, _ = refreshClaims["nonce"].(string)
+		idTokenClaims = clientSess.IDTokenClaims
+		if idTokenClaims == nil {
+			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce)
+		}
+		accessClaims = clientSess.AccessTokenClaims
+		if accessClaims == nil {
+			accessClaims = defaultAccessTokenClaims(subject, scope)
+		}
 		accessLifetime = intFromAny(refreshClaims["access_token_lifetime"], s.accessTokenLifetime)
 		refreshLifetime = intFromAny(refreshClaims["refresh_token_lifetime"], s.refreshTokenLifetime)
 
@@ -543,17 +660,14 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("GET-TOKEN: Issuing tokens!")
 	accessAud := dedupeStrings([]string{s.apiBaseURL, s.externalURL + "/userinfo"})
-	accessToken, err := s.issueToken(subject, accessAud, map[string]any{
-		"token_use": "access",
-		"scope":     scope,
-	}, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
+	accessToken, issuedAccessClaims, err := s.issueToken(subject, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
 	if err != nil {
 		http.Error(w, "token issue error", http.StatusInternalServerError)
 		return
 	}
 
 	refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
-	refreshToken, err := s.issueToken(subject, refreshAud, map[string]any{
+	refreshToken, _, err := s.issueToken(subject, refreshAud, map[string]any{
 		"client_id":              clientID,
 		"session_id":             sessionID,
 		"access_token_lifetime":  accessLifetime,
@@ -574,24 +688,33 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		"token_type":    "Bearer",
 	}
 
+	var issuedIDTokenClaims map[string]any
 	if strings.Contains(scope, "openid") {
-		claims := map[string]any{}
-		if nonce != "" {
-			claims["nonce"] = nonce
-		}
-		claims["azp"] = clientID
-		if strings.Contains(scope, "profile") {
-			claims["name"] = fmt.Sprintf("Name of user %s", capitalize(subject))
-			claims["preferred_username"] = capitalize(subject)
-		}
-
-		idToken, err := s.issueToken(subject, []string{clientID}, claims, time.Now().UTC().Add(60*time.Minute))
+		var idToken string
+		idToken, issuedIDTokenClaims, err = s.issueToken(subject, []string{clientID}, idTokenClaims, time.Now().UTC().Add(60*time.Minute))
 		if err != nil {
 			http.Error(w, "token issue error", http.StatusInternalServerError)
 			return
 		}
 		response["id_token"] = idToken
 	}
+
+	// Update the stored session with the full claim sets as last issued so the
+	// sessions page reflects exactly what was put in the tokens.
+	s.mu.Lock()
+	if sess, ok := s.sessions[sessionID]; ok {
+		for i := range sess.ClientSessions {
+			if sess.ClientSessions[i].ClientID == clientID {
+				sess.ClientSessions[i].AccessTokenClaims = issuedAccessClaims
+				if issuedIDTokenClaims != nil {
+					sess.ClientSessions[i].IDTokenClaims = issuedIDTokenClaims
+				}
+				break
+			}
+		}
+		s.sessions[sessionID] = sess
+	}
+	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response)
@@ -732,7 +855,7 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(config)
 }
 
-func (s *server) issueToken(subject string, audience []string, claims map[string]any, expiry time.Time) (string, error) {
+func (s *server) issueToken(subject string, audience []string, claims map[string]any, expiry time.Time) (string, map[string]any, error) {
 	allClaims := jwt.MapClaims{}
 	for k, v := range claims {
 		allClaims[k] = v
@@ -746,7 +869,22 @@ func (s *server) issueToken(subject string, audience []string, claims map[string
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, allClaims)
 	token.Header["kid"] = "k0"
 
-	return token.SignedString(s.privateKey)
+	signed, err := token.SignedString(s.privateKey)
+	if err != nil {
+		return "", nil, err
+	}
+
+	// Build the full claim map as issued, excluding the time-specific claims
+	// that are meaningless to store (iat, exp).
+	issued := make(map[string]any, len(allClaims))
+	for k, v := range allClaims {
+		if k == "iat" || k == "exp" {
+			continue
+		}
+		issued[k] = v
+	}
+
+	return signed, issued, nil
 }
 
 func (s *server) decodeJWT(token string, key *rsa.PublicKey) (map[string]any, error) {
@@ -860,15 +998,6 @@ func audContains(claims map[string]any, want string) bool {
 	return false
 }
 
-func audContainsAny(claims map[string]any, wants []string) bool {
-	for _, want := range wants {
-		if audContains(claims, want) {
-			return true
-		}
-	}
-	return false
-}
-
 func dedupeStrings(in []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(in))
@@ -880,6 +1009,46 @@ func dedupeStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func claimsToPrettyJSON(claims map[string]any) (string, error) {
+	if claims == nil {
+		claims = map[string]any{}
+	}
+	b, err := json.MarshalIndent(claims, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func parseClaimsJSON(raw string) (map[string]any, error) {
+	claims := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+
+func defaultAccessTokenClaims(_ string, scope string) map[string]any {
+	return map[string]any{
+		"token_use": "access",
+		"scope":     scope,
+	}
+}
+
+func defaultIDTokenClaims(subject, scope, clientID, nonce string) map[string]any {
+	claims := map[string]any{
+		"azp": clientID,
+	}
+	if nonce != "" {
+		claims["nonce"] = nonce
+	}
+	if strings.Contains(scope, "profile") {
+		claims["name"] = fmt.Sprintf("Name of user %s", capitalize(subject))
+		claims["preferred_username"] = capitalize(subject)
+	}
+	return claims
 }
 
 func intFromAny(v any, def int) int {

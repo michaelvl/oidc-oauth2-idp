@@ -125,7 +125,7 @@ func TestIssueAndDecodeToken(t *testing.T) {
 		publicKey:   &key.PublicKey,
 	}
 
-	tok, err := srv.issueToken("alice", []string{"api", "userinfo"}, map[string]any{
+	tok, _, err := srv.issueToken("alice", []string{"api", "userinfo"}, map[string]any{
 		"scope":     "openid profile",
 		"token_use": "access",
 	}, time.Now().Add(5*time.Minute))
@@ -176,7 +176,7 @@ func TestDecodeJWTRejectsWrongKey(t *testing.T) {
 		publicKey:   &keyA.PublicKey,
 	}
 
-	tok, err := srv.issueToken("alice", []string{"api"}, map[string]any{}, time.Now().Add(5*time.Minute))
+	tok, _, err := srv.issueToken("alice", []string{"api"}, map[string]any{}, time.Now().Add(5*time.Minute))
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}

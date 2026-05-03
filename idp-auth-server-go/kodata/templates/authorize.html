@@ -16,6 +16,15 @@
         <p class="meta"><strong>{{.ClientID}}</strong></p>
         <p class="meta">For these scopes:</p>
         <p class="meta"><strong>{{.Scope}}</strong></p>
+        {{if .ErrorText}}
+        <p class="error">{{.ErrorText}}</p>
+        {{end}}
+
+        <label for="id-token-claims">ID Token Claims</label>
+        <textarea id="id-token-claims" name="id_token_claims_json" class="claims-editor">{{.IDTokenClaimsJSON}}</textarea>
+
+        <label for="access-token-claims">Access Token Claims</label>
+        <textarea id="access-token-claims" name="access_token_claims_json" class="claims-editor">{{.AccessTokenClaimsJSON}}</textarea>
 
         <div class="btn-row">
           <button class="btn btn-primary" type="submit" name="approve">Approve</button>
