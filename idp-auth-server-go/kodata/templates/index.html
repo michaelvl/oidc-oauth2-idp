@@ -15,6 +15,7 @@
       {{if .Sessions}}
         {{range $session := .Sessions}}
         <section class="session">
+          <img class="session-avatar" src="{{$session.AvatarURL}}" alt="User avatar" width="36" height="36">
           <p class="meta"><strong>{{$session.SessionID}}</strong></p>
           <p class="meta">subject: {{$session.Subject}}</p>
           {{range $clientSession := $session.ClientSessions}}

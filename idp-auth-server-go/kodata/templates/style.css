@@ -29,6 +29,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .avatar svg {
@@ -170,6 +171,14 @@ input[type="password"]:focus,
   font-size: 14px;
   color: #1f2328;
   word-wrap: break-word;
+}
+
+.session-avatar {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  margin-bottom: 8px;
 }
 
 .session {

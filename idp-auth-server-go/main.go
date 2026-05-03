@@ -88,6 +88,7 @@ type indexData struct {
 type sessionView struct {
 	SessionID      string
 	Subject        string
+	AvatarURL      string
 	ClientSessions []clientSessionView
 }
 
@@ -111,6 +112,7 @@ type authorizeData struct {
 	IDTokenClaimsJSON     string
 	AccessTokenClaimsJSON string
 	ErrorText             string
+	AvatarURL             string
 }
 
 type endsessionData struct {
@@ -142,6 +144,10 @@ func main() {
 	mux.HandleFunc("/endsession-approve", srv.endsessionApprove)
 	mux.HandleFunc("/.well-known/jwks.json", srv.jwks)
 	mux.HandleFunc("/.well-known/openid-configuration", srv.openidConfiguration)
+	for i := 1; i <= 8; i++ {
+		path := fmt.Sprintf("/avatars/%d.svg", i)
+		mux.HandleFunc(path, srv.avatar)
+	}
 
 	handler := withCORS(withLogging(mux))
 
@@ -250,6 +256,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		views = append(views, sessionView{
 			SessionID:      sessionID,
 			Subject:        sess.Subject,
+			AvatarURL:      s.avatarURL(sess.Subject),
 			ClientSessions: clientViews,
 		})
 	}
@@ -265,6 +272,30 @@ func (s *server) styleCSS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, filepath.Join(s.templatesDir, "style.css"))
+}
+
+func (s *server) avatar(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+	// Extract filename from path (e.g. /avatars/3.svg -> 3.svg)
+	name := filepath.Base(r.URL.Path)
+	w.Header().Set("Content-Type", "image/svg+xml")
+	http.ServeFile(w, r, filepath.Join(s.templatesDir, "avatars", name))
+}
+
+// avatarIndex returns a stable 1-based index (1–8) derived from the username.
+func avatarIndex(username string) int {
+	var sum int
+	for _, b := range []byte(username) {
+		sum += int(b)
+	}
+	return (sum % 8) + 1
+}
+
+func (s *server) avatarURL(username string) string {
+	return fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(username))
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +434,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		ReqID:                 reqID,
 		IDTokenClaimsJSON:     idTokenClaimsJSON,
 		AccessTokenClaimsJSON: accessTokenClaimsJSON,
+		AvatarURL:             s.avatarURL(subject),
 	})
 }
 
@@ -441,6 +473,7 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			IDTokenClaimsJSON:     idTokenClaimsJSON,
 			AccessTokenClaimsJSON: accessTokenClaimsJSON,
 			ErrorText:             "ID token claims must be valid JSON object",
+			AvatarURL:             s.avatarURL(subject),
 		})
 		return
 	}
@@ -453,6 +486,7 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			IDTokenClaimsJSON:     idTokenClaimsJSON,
 			AccessTokenClaimsJSON: accessTokenClaimsJSON,
 			ErrorText:             "Access token claims must be valid JSON object",
+			AvatarURL:             s.avatarURL(subject),
 		})
 		return
 	}
@@ -751,6 +785,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	out["sub"] = sub
 	if strings.Contains(scope, "profile") {
 		out["name"] = fmt.Sprintf("Name of user is %s", capitalize(sub))
+		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sub))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -848,6 +883,7 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"scopes_supported":                      []string{"openid", "profile"},
+		"claims_supported":                      []string{"sub", "name", "picture"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
 	}
 
