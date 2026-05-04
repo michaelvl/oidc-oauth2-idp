@@ -24,8 +24,9 @@ body {
 
 .page {
   width: 100%;
-  max-width: 68ch;
+  max-width: 100%;
   margin: 0 auto;
+  overflow-x: auto;
 }
 
 .banner {
@@ -39,9 +40,8 @@ body {
 
 .ascii-card {
   margin: 0 auto 14px;
+  width: 62ch;
   max-width: 62ch;
-  border-left: 1px solid var(--line);
-  border-right: 1px solid var(--line);
 }
 
 .ascii-line {
@@ -52,13 +52,25 @@ body {
 }
 
 .ascii-row {
+  display: flex;
+  align-items: flex-start;
   background: var(--panel);
-  padding: 2px 8px;
+  padding: 2px 0;
   line-height: 1.2;
+  width: 62ch;
+}
+
+.edge {
+  color: var(--line);
+  flex: 0 0 auto;
+  width: 1ch;
 }
 
 .content {
+  flex: 1 1 auto;
   color: var(--text);
+  padding: 0 8px;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -82,7 +94,26 @@ label {
 }
 
 input[type="text"],
-input[type="password"],
+input[type="password"] {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: inherit;
+  padding: 0;
+  margin: 0;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus {
+  outline: none;
+}
+
+textarea:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -90,18 +121,18 @@ textarea {
   color: var(--text-strong);
   font: inherit;
   padding: 6px;
-}
-
-input[type="text"]:focus,
-input[type="password"]:focus,
-textarea:focus {
-  outline: 1px solid var(--accent);
-  outline-offset: 1px;
-}
-
-textarea {
   min-height: 120px;
   resize: vertical;
+}
+
+.claims-block {
+  margin: 6px 0 10px;
+  width: 62ch;
+}
+
+.claims-label {
+  margin: 0 0 4px;
+  color: var(--text-muted);
 }
 
 .btn-row {
@@ -111,22 +142,20 @@ textarea {
 }
 
 button {
-  border: 1px solid var(--line);
-  background: #121722;
+  border: 0;
+  background: transparent;
   color: var(--text-strong);
   font: inherit;
-  padding: 6px 10px;
+  padding: 0;
   cursor: pointer;
 }
 
 button:hover {
-  border-color: var(--accent);
   color: var(--accent);
 }
 
 .danger-btn {
   color: var(--danger);
-  border-color: var(--danger);
 }
 
 pre {
@@ -138,4 +167,15 @@ pre {
 
 .session {
   margin-top: 10px;
+}
+
+.claims-dump {
+  margin: 4px 0 8px;
+  border: 1px solid var(--line);
+  background: #0d1118;
+  padding: 6px;
+}
+
+form {
+  margin: 0;
 }
