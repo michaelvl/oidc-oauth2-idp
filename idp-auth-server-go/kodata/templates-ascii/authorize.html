@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page">
+      <pre class="banner">+================+
+|   AUTHORIZE    |
++================+</pre>
+
+      <section class="ascii-card">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><div class="content title">AUTHORIZE REQUEST</div></div>
+        <div class="ascii-row"><div class="content">Avatar: [o_o]</div></div>
+        <div class="ascii-row"><div class="content">Client: <strong>{{.ClientID}}</strong></div></div>
+        <div class="ascii-row"><div class="content">Scope : <strong>{{.Scope}}</strong></div></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+
+      <form class="ascii-card" action="/approve" method="post">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        {{if .ErrorText}}
+        <div class="ascii-row"><p class="content danger">ERROR: {{.ErrorText}}</p></div>
+        {{end}}
+
+        <div class="ascii-row"><label class="content" for="id-token-claims">ID token claims (JSON)</label></div>
+        <div class="ascii-row"><div class="content"><textarea id="id-token-claims" name="id_token_claims_json">{{.IDTokenClaimsJSON}}</textarea></div></div>
+
+        <div class="ascii-row"><label class="content" for="access-token-claims">Access token claims (JSON)</label></div>
+        <div class="ascii-row"><div class="content"><textarea id="access-token-claims" name="access_token_claims_json">{{.AccessTokenClaimsJSON}}</textarea></div></div>
+
+        <div class="ascii-row"><div class="content btn-row"><button type="submit" name="approve" autofocus>[ APPROVE ]</button><button type="submit" name="deny" class="danger-btn">[ DENY ]</button></div></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <input type="hidden" name="reqid" value="{{.ReqID}}">
+      </form>
+    </main>
+  </body>
+</html>

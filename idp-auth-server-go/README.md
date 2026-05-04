@@ -30,7 +30,7 @@ Login accepts any username and requires password `valid`.
 ## Environment variables
 
 - `TEMPLATES_DIR` (default: `$KO_DATA_PATH/templates`)
-  - Template/static directory used at runtime. Override this to point at a bind-mounted directory in containers.
+  - Template/static directory used at runtime. Override this to select a bundled theme (for example `$KO_DATA_PATH/templates-ascii`) or point at a bind-mounted directory in containers.
 - `KO_DATA_PATH` (default fallback for local runs: `idp-auth-server-go/kodata`)
   - Used to derive the default templates path when `TEMPLATES_DIR` is not set.
 - `APP_PORT` (default: `5001`)
@@ -60,6 +60,7 @@ From repo root:
 The server loads templates from `TEMPLATES_DIR`.
 
 - In ko-published images, templates are included from `idp-auth-server-go/kodata/templates` and available via `$KO_DATA_PATH/templates`.
+- A second bundled ASCII theme is available at `idp-auth-server-go/kodata/templates-ascii` and can be selected with `TEMPLATES_DIR=$KO_DATA_PATH/templates-ascii`.
 - To override templates at runtime, bind-mount a directory and set `TEMPLATES_DIR` to that mount path.
 
 ## Container publishing

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page">
+      <pre class="banner">+================+
+|    SIGN IN     |
++================+</pre>
+
+      <section class="ascii-card">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><div class="content title">AUTHENTICATE</div></div>
+        <div class="ascii-row"><div class="content">User: [^_^]</div></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+
+      <form class="ascii-card" action="/login" method="post">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><label class="content" for="username">Username</label></div>
+        <div class="ascii-row"><div class="content"><input id="username" type="text" name="username" required autofocus></div></div>
+        <div class="ascii-row"><label class="content" for="password">Password</label></div>
+        <div class="ascii-row"><div class="content"><input id="password" type="password" name="password" required></div></div>
+        <div class="ascii-row"><div class="content"><button type="submit" name="login">[ SIGN IN ]</button></div></div>
+        <div class="ascii-row"><p class="content muted">Hint: password is "valid"</p></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <input type="hidden" name="reqid" value="{{.ReqID}}">
+      </form>
+    </main>
+  </body>
+</html>

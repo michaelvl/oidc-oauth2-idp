@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page">
+      <pre class="banner">+================+
+|   SIGN OUT     |
++================+</pre>
+
+      <form class="ascii-card" action="/endsession-approve" method="post">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><div class="content title">END SESSION</div></div>
+        <div class="ascii-row"><div class="content">User : <strong>{{.Subject}}</strong></div></div>
+        <div class="ascii-row"><div class="content">Action: confirm sign out</div></div>
+        <div class="ascii-row"><div class="content"><button type="submit" class="danger-btn">[ SIGN OUT ]</button></div></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <input type="hidden" name="sessionid" value="{{.SessionID}}">
+        <input type="hidden" name="redirurl" value="{{.RedirURL}}">
+      </form>
+    </main>
+  </body>
+</html>

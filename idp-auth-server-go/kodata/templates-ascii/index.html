@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page">
+      <pre class="banner">+================+
+|    SESSIONS    |
++================+</pre>
+
+      <section class="ascii-card">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><div class="content title">ACTIVE SESSIONS</div></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+
+      {{if .Sessions}}
+      {{range $session := .Sessions}}
+      <section class="ascii-card session">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><div class="content">[o_o] session: <strong>{{$session.SessionID}}</strong></div></div>
+        <div class="ascii-row"><div class="content">subject: {{$session.Subject}}</div></div>
+        {{range $clientSession := $session.ClientSessions}}
+        <div class="ascii-row"><div class="content">client_id: {{$clientSession.ClientID}}</div></div>
+        <div class="ascii-row"><div class="content">scope: {{$clientSession.Scope}}</div></div>
+        <div class="ascii-row"><div class="content muted">ID token claims</div></div>
+        <div class="ascii-row"><pre class="content">{{$clientSession.IDTokenClaimsJSON}}</pre></div>
+        <div class="ascii-row"><div class="content muted">access token claims</div></div>
+        <div class="ascii-row"><pre class="content">{{$clientSession.AccessTokenClaimsJSON}}</pre></div>
+          {{if $clientSession.CodeChallengeMethod}}
+          <div class="ascii-row"><div class="content">code challenge method: {{$clientSession.CodeChallengeMethod}}</div></div>
+          <div class="ascii-row"><div class="content">code challenge: {{$clientSession.CodeChallenge}}</div></div>
+          {{end}}
+        {{end}}
+        <div class="ascii-row"><form class="content" action="/logout" method="post"><input type="hidden" name="sessionid" value="{{$session.SessionID}}"><button class="danger-btn" type="submit">[ SIGN OUT ]</button></form></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+      {{end}}
+      {{else}}
+      <section class="ascii-card">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><div class="content muted">No active sessions.</div></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+      {{end}}
+    </main>
+  </body>
+</html>
