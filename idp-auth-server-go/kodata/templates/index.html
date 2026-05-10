@@ -21,9 +21,11 @@
           {{range $clientSession := $session.ClientSessions}}
           <p class="meta">client_id: {{$clientSession.ClientID}}</p>
           <p class="meta">scope: {{$clientSession.Scope}}</p>
+          {{if $clientSession.IDTokenIssued}}
           <p class="meta">ID token claims:</p>
           <pre class="claims-view">{{$clientSession.IDTokenClaimsJSON}}</pre>
           <p class="meta">ID token expiry: {{$clientSession.IDTokenExpiry}}</p>
+          {{end}}
           <p class="meta">access token claims:</p>
           <pre class="claims-view">{{$clientSession.AccessTokenClaimsJSON}}</pre>
           <p class="meta">access token expiry: {{$clientSession.AccessTokenExpiry}}</p>

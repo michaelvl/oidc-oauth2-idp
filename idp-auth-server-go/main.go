@@ -96,6 +96,7 @@ type sessionView struct {
 type clientSessionView struct {
 	ClientID              string
 	Scope                 string
+	IDTokenIssued         bool
 	IDTokenClaimsJSON     string
 	AccessTokenClaimsJSON string
 	IDTokenExpiry         string
@@ -252,6 +253,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			clientViews = append(clientViews, clientSessionView{
 				ClientID:              clientSess.ClientID,
 				Scope:                 clientSess.Scope,
+				IDTokenIssued:         clientSess.IDTokenClaims != nil,
 				IDTokenClaimsJSON:     idTokenClaimsJSON,
 				AccessTokenClaimsJSON: accessTokenClaimsJSON,
 				IDTokenExpiry:         idTokenExpiry,
