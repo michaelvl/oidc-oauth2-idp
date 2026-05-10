@@ -37,8 +37,9 @@ Login accepts any username and requires password `valid`.
   - HTTP listen port.
 - `IDP_EXTERNAL_URL` (default: `http://127.0.0.1:5001`)
   - Public issuer URL used in discovery and token `iss` claims.
-- `API_BASE_URL` (default: `http://127.0.0.1:5002/api`)
-  - API audience used when issuing access tokens.
+- `EXTRA_AUDIENCES` (default: empty)
+  - Comma-separated list of additional audiences to include in access token `aud` claims.
+  - Example: `EXTRA_AUDIENCES=https://api.example.com,https://inventory.example.com`
 - `ACCESS_TOKEN_LIFETIME` (default: `1200`)
   - Access token lifetime in seconds.
 - `REFRESH_TOKEN_LIFETIME` (default: `3600`)

@@ -35,6 +35,7 @@ type clientSession struct {
 	CodeChallengeMethod string
 	IDTokenClaims       map[string]any
 	AccessTokenClaims   map[string]any
+	RefreshTokenClaims  map[string]any
 }
 
 type session struct {
@@ -72,7 +73,7 @@ type server struct {
 
 	appPort     string
 	externalURL string
-	apiBaseURL  string
+	extraAudiences []string
 
 	accessTokenLifetime  int
 	refreshTokenLifetime int
@@ -95,10 +96,11 @@ type sessionView struct {
 type clientSessionView struct {
 	ClientID              string
 	Scope                 string
-	CodeChallenge         string
-	CodeChallengeMethod   string
 	IDTokenClaimsJSON     string
 	AccessTokenClaimsJSON string
+	IDTokenExpiry         string
+	AccessTokenExpiry     string
+	RefreshTokenExpiry    string
 }
 
 type authenticateData struct {
@@ -160,7 +162,7 @@ func main() {
 func newServer() (*server, error) {
 	appPort := getenvDefault("APP_PORT", "5001")
 	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
-	apiBaseURL := getenvDefault("API_BASE_URL", "http://127.0.0.1:5002/api")
+	extraAudiences := getenvCSV("EXTRA_AUDIENCES")
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
@@ -184,7 +186,7 @@ func newServer() (*server, error) {
 		templatesDir:         templatesDir,
 		appPort:              appPort,
 		externalURL:          externalURL,
-		apiBaseURL:           apiBaseURL,
+		extraAudiences:       extraAudiences,
 		accessTokenLifetime:  accessLifetime,
 		refreshTokenLifetime: refreshLifetime,
 		privateKey:           privateKey,
@@ -244,13 +246,17 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				accessTokenClaimsJSON = "{}"
 			}
+			idTokenExpiry := formatExpiryClaim(clientSess.IDTokenClaims)
+			accessTokenExpiry := formatExpiryClaim(clientSess.AccessTokenClaims)
+			refreshTokenExpiry := formatExpiryClaim(clientSess.RefreshTokenClaims)
 			clientViews = append(clientViews, clientSessionView{
 				ClientID:              clientSess.ClientID,
 				Scope:                 clientSess.Scope,
-				CodeChallenge:         clientSess.CodeChallenge,
-				CodeChallengeMethod:   clientSess.CodeChallengeMethod,
 				IDTokenClaimsJSON:     idTokenClaimsJSON,
 				AccessTokenClaimsJSON: accessTokenClaimsJSON,
+				IDTokenExpiry:         idTokenExpiry,
+				AccessTokenExpiry:     accessTokenExpiry,
+				RefreshTokenExpiry:    refreshTokenExpiry,
 			})
 		}
 		views = append(views, sessionView{
@@ -693,7 +699,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("GET-TOKEN: Issuing tokens!")
-	accessAud := dedupeStrings([]string{s.apiBaseURL, s.externalURL + "/userinfo"})
+	accessAud := dedupeStrings(append([]string{s.externalURL + "/userinfo"}, s.extraAudiences...))
 	accessToken, issuedAccessClaims, err := s.issueToken(subject, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
 	if err != nil {
 		http.Error(w, "token issue error", http.StatusInternalServerError)
@@ -701,7 +707,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
-	refreshToken, _, err := s.issueToken(subject, refreshAud, map[string]any{
+	refreshToken, issuedRefreshClaims, err := s.issueToken(subject, refreshAud, map[string]any{
 		"client_id":              clientID,
 		"session_id":             sessionID,
 		"access_token_lifetime":  accessLifetime,
@@ -740,6 +746,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		for i := range sess.ClientSessions {
 			if sess.ClientSessions[i].ClientID == clientID {
 				sess.ClientSessions[i].AccessTokenClaims = issuedAccessClaims
+				sess.ClientSessions[i].RefreshTokenClaims = issuedRefreshClaims
 				if issuedIDTokenClaims != nil {
 					sess.ClientSessions[i].IDTokenClaims = issuedIDTokenClaims
 				}
@@ -910,11 +917,10 @@ func (s *server) issueToken(subject string, audience []string, claims map[string
 		return "", nil, err
 	}
 
-	// Build the full claim map as issued, excluding the time-specific claims
-	// that are meaningless to store (iat, exp).
+	// Build the full claim map as issued, excluding iat.
 	issued := make(map[string]any, len(allClaims))
 	for k, v := range allClaims {
-		if k == "iat" || k == "exp" {
+		if k == "iat" {
 			continue
 		}
 		issued[k] = v
@@ -1098,6 +1104,38 @@ func intFromAny(v any, def int) int {
 	default:
 		return def
 	}
+}
+
+func getenvCSV(name string) []string {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func formatExpiryClaim(claims map[string]any) string {
+	if claims == nil {
+		return "not issued"
+	}
+	exp, ok := claims["exp"]
+	if !ok {
+		return "not issued"
+	}
+	expUnix := intFromAny(exp, 0)
+	if expUnix <= 0 {
+		return "not issued"
+	}
+	return time.Unix(int64(expUnix), 0).UTC().Format(time.RFC3339)
 }
 
 func getenvDefault(name, def string) string {

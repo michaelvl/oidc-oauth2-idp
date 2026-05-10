@@ -29,6 +29,10 @@ body {
   overflow-x: auto;
 }
 
+.page--wide {
+  min-width: 130ch;
+}
+
 .banner {
   margin: 0 0 12px;
   color: var(--accent);
@@ -40,8 +44,8 @@ body {
 
 .ascii-card {
   margin: 0 auto 14px;
-  width: 62ch;
-  max-width: 62ch;
+  width: 128ch;
+  max-width: 128ch;
 }
 
 .ascii-line {
@@ -57,7 +61,7 @@ body {
   background: var(--panel);
   padding: 2px 0;
   line-height: 1.2;
-  width: 62ch;
+  width: 128ch;
 }
 
 .edge {
@@ -127,7 +131,7 @@ textarea {
 
 .claims-block {
   margin: 6px 0 10px;
-  width: 62ch;
+  width: 100ch;
 }
 
 .claims-label {
