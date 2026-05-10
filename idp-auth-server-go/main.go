@@ -45,6 +45,7 @@ type session struct {
 }
 
 type authContextEntry struct {
+	// FIXME: Add a timestamp field so stale auth requests can be rejected in /approve.
 	Scope               string
 	ClientID            string
 	RedirectURI         string
@@ -97,6 +98,7 @@ type clientSessionView struct {
 	ClientID              string
 	Scope                 string
 	IDTokenIssued         bool
+	RefreshTokenIssued    bool
 	IDTokenClaimsJSON     string
 	AccessTokenClaimsJSON string
 	IDTokenExpiry         string
@@ -254,6 +256,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 				ClientID:              clientSess.ClientID,
 				Scope:                 clientSess.Scope,
 				IDTokenIssued:         clientSess.IDTokenClaims != nil,
+				RefreshTokenIssued:    clientSess.RefreshTokenClaims != nil,
 				IDTokenClaimsJSON:     idTokenClaimsJSON,
 				AccessTokenClaimsJSON: accessTokenClaimsJSON,
 				IDTokenExpiry:         idTokenExpiry,
@@ -332,6 +335,7 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 	clientID := r.Form.Get("client_id")
 	scope := r.Form.Get("scope")
 	redirectURI := r.Form.Get("redirect_uri")
+	// FIXME: Validate client_id and redirect_uri against a registered client registry.
 	state := r.Form.Get("state")
 	nonce := r.Form.Get("nonce")
 	prompt := r.Form.Get("prompt")
@@ -469,9 +473,11 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		renderTemplate(w, s.templates["error"], errorData{Text: "Not approved"})
 		return
 	}
+	// FIXME: Validate request age and reject stale auth requests.
 
 	idTokenClaimsJSON := r.Form.Get("id_token_claims_json")
 	accessTokenClaimsJSON := r.Form.Get("access_token_claims_json")
+	// FIXME: Validate that the requested scope is permitted for this client_id.
 	idTokenClaims, err := parseClaimsJSON(idTokenClaimsJSON)
 	if err != nil {
 		renderTemplate(w, s.templates["authorize"], authorizeData{
@@ -564,6 +570,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	clientAuth := r.Header.Get("Authorization")
 	log.Printf("GET-TOKEN: Client auth: '%s'", clientAuth)
+	// FIXME: Validate client authentication (client_secret_basic or client_secret_post).
 
 	grantType := r.Form.Get("grant_type")
 	log.Printf("GET-TOKEN: Grant type: '%s'", grantType)
@@ -584,6 +591,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	case "authorization_code":
 		code := r.Form.Get("code")
 		_ = r.Form.Get("redirect_uri")
+		// FIXME: Validate redirect_uri matches the value stored when the code was issued.
 		codeVerifier := r.Form.Get("code_verifier")
 
 		s.mu.Lock()
@@ -598,6 +606,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 			return
 		}
+		// FIXME: Validate that the authorization code has not expired (track issued-at in codeMeta).
 
 		log.Printf("GET-TOKEN: Valid code: '%s'", code)
 		sessionID = meta.SessionID
@@ -673,6 +682,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
 			return
 		}
+		// FIXME: Validate refresh token beyond JWT signature - check for revocation.
 
 		clientSess := getClientSessionByID(sess, clientID)
 		if clientSess == nil {
@@ -708,26 +718,30 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
-	refreshToken, issuedRefreshClaims, err := s.issueToken(subject, refreshAud, map[string]any{
-		"client_id":              clientID,
-		"session_id":             sessionID,
-		"access_token_lifetime":  accessLifetime,
-		"refresh_token_lifetime": refreshLifetime,
-		"nonce":                  nonce,
-		"token_use":              "refresh",
-		"scope":                  scope,
-	}, time.Now().UTC().Add(time.Duration(refreshLifetime)*time.Second))
-	if err != nil {
-		http.Error(w, "token issue error", http.StatusInternalServerError)
-		return
+	response := map[string]any{
+		"access_token": accessToken,
+		"expires_in":   accessLifetime,
+		"token_type":   "Bearer",
 	}
 
-	response := map[string]any{
-		"access_token":  accessToken,
-		"expires_in":    accessLifetime,
-		"refresh_token": refreshToken,
-		"token_type":    "Bearer",
+	var issuedRefreshClaims map[string]any
+	if hasScope(scope, "offline_access") {
+		refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
+		refreshToken, refreshClaims, issueErr := s.issueToken(subject, refreshAud, map[string]any{
+			"client_id":              clientID,
+			"session_id":             sessionID,
+			"access_token_lifetime":  accessLifetime,
+			"refresh_token_lifetime": refreshLifetime,
+			"nonce":                  nonce,
+			"token_use":              "refresh",
+			"scope":                  scope,
+		}, time.Now().UTC().Add(time.Duration(refreshLifetime)*time.Second))
+		if issueErr != nil {
+			http.Error(w, "token issue error", http.StatusInternalServerError)
+			return
+		}
+		issuedRefreshClaims = refreshClaims
+		response["refresh_token"] = refreshToken
 	}
 
 	var issuedIDTokenClaims map[string]any
@@ -775,6 +789,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 
 	parts := strings.Fields(auth)
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+		// FIXME: Return HTTP 401 with OAuth JSON error instead of HTML error template.
 		renderTemplate(w, s.templates["error"], errorData{Text: "Invalid authorization"})
 		return
 	}
@@ -787,6 +802,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 
 	scope, _ := claims["scope"].(string)
 	log.Printf("GET-USERINFO: Access token audience: '%v'", claims["aud"])
+	// FIXME: Validate that the access token audience includes the /userinfo endpoint.
 	log.Printf("GET-USERINFO: Scope '%s'", scope)
 
 	out := map[string]any{}
@@ -891,7 +907,7 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"scopes_supported":                      []string{"openid", "profile"},
+		"scopes_supported":                      []string{"openid", "profile", "offline_access"},
 		"claims_supported":                      []string{"sub", "name", "picture"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
 	}
@@ -1079,6 +1095,15 @@ func defaultAccessTokenClaims(_ string, scope string) map[string]any {
 		"token_use": "access",
 		"scope":     scope,
 	}
+}
+
+func hasScope(scope, target string) bool {
+	for _, s := range strings.Fields(scope) {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultIDTokenClaims(subject, scope, clientID, nonce string) map[string]any {

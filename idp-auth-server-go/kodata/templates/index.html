@@ -29,7 +29,9 @@
           <p class="meta">access token claims:</p>
           <pre class="claims-view">{{$clientSession.AccessTokenClaimsJSON}}</pre>
           <p class="meta">access token expiry: {{$clientSession.AccessTokenExpiry}}</p>
+          {{if $clientSession.RefreshTokenIssued}}
           <p class="meta">refresh token expiry: {{$clientSession.RefreshTokenExpiry}}</p>
+          {{end}}
           {{end}}
           <form action="/logout" method="post">
             <input type="hidden" name="sessionid" value="{{$session.SessionID}}">

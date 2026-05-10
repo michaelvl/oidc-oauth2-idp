@@ -32,7 +32,9 @@
         <div class="ascii-row"><span class="edge">|</span><div class="content muted">access token claims</div><span class="edge">|</span></div>
         <div class="claims-dump"><pre>{{$clientSession.AccessTokenClaimsJSON}}</pre></div>
         <div class="ascii-row"><span class="edge">|</span><div class="content">access token expiry: {{$clientSession.AccessTokenExpiry}}</div><span class="edge">|</span></div>
+        {{if $clientSession.RefreshTokenIssued}}
         <div class="ascii-row"><span class="edge">|</span><div class="content">refresh token expiry: {{$clientSession.RefreshTokenExpiry}}</div><span class="edge">|</span></div>
+        {{end}}
         {{end}}
         <div class="ascii-row"><span class="edge">|</span><form class="content" action="/logout" method="post"><input type="hidden" name="sessionid" value="{{$session.SessionID}}"><button class="danger-btn" type="submit">[ SIGN OUT ]</button></form><span class="edge">|</span></div>
         <p class="ascii-line">+------------------------------------------------------------+</p>
