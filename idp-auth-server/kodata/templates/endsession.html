@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page">
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 16 16">
+          <path d="M10.561 8.073a3.5 3.5 0 1 0-5.122 0A5 5 0 0 0 3 12.5a.75.75 0 0 0 1.5 0 3.5 3.5 0 1 1 7 0 .75.75 0 0 0 1.5 0 5 5 0 0 0-2.439-4.427M8 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4"></path>
+        </svg>
+      </div>
+      <h1 class="heading">Sign out</h1>
+      <form class="card" action="/endsession-approve" method="post">
+        <p class="meta">Sign out <strong>{{.Subject}}</strong>?</p>
+        <input type="hidden" name="sessionid" value="{{.SessionID}}">
+        <input type="hidden" name="redirurl" value="{{.RedirURL}}">
+        <button class="btn btn-danger" type="submit">Sign out</button>
+      </form>
+    </main>
+  </body>
+</html>

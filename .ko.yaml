@@ -3,9 +3,9 @@ defaultPlatforms:
   - linux/arm64
 
 builds:
-  - id: idp-auth-server-go
+  - id: idp-auth-server
     dir: .
-    main: ./idp-auth-server-go
+    main: ./idp-auth-server
   - id: bff
     dir: .
     main: ./bff/cmd/bff

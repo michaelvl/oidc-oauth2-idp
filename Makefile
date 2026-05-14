@@ -1,12 +1,12 @@
-APP := idp-auth-server-go
-PKG := ./idp-auth-server-go
+APP := idp-auth-server
+PKG := ./idp-auth-server
 BFF_APP := bff
 BFF_PKG := ./bff/cmd/bff
 BIN_DIR := bin
 BIN := $(BIN_DIR)/$(APP)
 BFF_BIN := $(BIN_DIR)/$(BFF_APP)
 KO_CONFIG_PATH ?= ./.ko.yaml
-KO_IMPORTPATH ?= ./idp-auth-server-go
+KO_IMPORTPATH ?= ./idp-auth-server
 KO_BFF_IMPORTPATH ?= ./bff/cmd/bff
 KO_DOCKER_REPO ?= ko.local
 KO_TAGS ?= latest
@@ -31,7 +31,7 @@ tidy:
 	go mod tidy
 
 fmt:
-	gofmt -w idp-auth-server-go/*.go
+	gofmt -w idp-auth-server/*.go
 
 lint:
 	golangci-lint run ./...
