@@ -49,7 +49,12 @@ jobs:
         shell: bash
         run: echo "value=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish image with ko
+      - name: Publish IdP image with ko
         env:
           KO_DOCKER_REPO: ${{ steps.repo.outputs.value }}
         run: devbox run make container
+
+      - name: Publish BFF image with ko
+        env:
+          KO_DOCKER_REPO: ${{ steps.repo.outputs.value }}
+        run: devbox run make container-bff
