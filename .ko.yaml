@@ -6,3 +6,6 @@ builds:
   - id: idp-auth-server-go
     dir: .
     main: ./idp-auth-server-go
+  - id: bff
+    dir: .
+    main: ./bff/cmd/bff
