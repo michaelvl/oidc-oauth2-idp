@@ -33,7 +33,7 @@ Login accepts any username and requires password `valid`.
   - Template/static directory used at runtime. Override this to select a bundled theme (for example `$KO_DATA_PATH/templates-ascii`) or point at a bind-mounted directory in containers.
 - `KO_DATA_PATH` (default fallback for local runs: `idp-auth-server/kodata`)
   - Used to derive the default templates path when `TEMPLATES_DIR` is not set.
-- `APP_PORT` (default: `5001`)
+- `PORT` (default: `5001`)
   - HTTP listen port.
 - `IDP_EXTERNAL_URL` (default: `http://127.0.0.1:5001`)
   - Public issuer URL used in discovery and token `iss` claims.

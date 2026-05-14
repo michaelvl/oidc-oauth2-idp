@@ -14,7 +14,7 @@ The IdP runs independently and issues OAuth2/OIDC tokens. It serves HTML templat
 
 Environment variables:
 
-- `APP_PORT` (default: `5001`): HTTP listen port.
+- `PORT` (default: `5001`): HTTP listen port.
 - `IDP_EXTERNAL_URL` (default: `http://127.0.0.1:5001`): issuer/external base URL used in discovery and token claims.
 - `EXTRA_AUDIENCES` (default: empty): comma-separated additional audiences accepted for access tokens.
 - `ACCESS_TOKEN_LIFETIME` (default: `1200`): access token lifetime in seconds.

@@ -163,7 +163,7 @@ func main() {
 }
 
 func newServer() (*server, error) {
-	appPort := getenvDefault("APP_PORT", "5001")
+	appPort := getenvDefault("PORT", "5001")
 	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
 	extraAudiences := getenvCSV("EXTRA_AUDIENCES")
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
