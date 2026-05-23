@@ -60,18 +60,88 @@ What it does:
 - Proxies API requests with injected bearer tokens and proxies static/SPA assets
   from a static upstream.
 
-Paths and proxy behavior:
+Request flows and path handling:
 
-- `GET /auth/login`: starts OIDC login by redirecting to the configured issuer.
-- `GET /auth/callback`: receives the authorization code, exchanges tokens,
-  creates the BFF session.
-- `POST /auth/logout`: destroys session and returns logout redirect target.
-- `GET /auth/me`: returns current authenticated user claims from server-side
+- Public paths (no session required):
+  - `/assets/*` and `/favicon.ico`. These are forwarded to the application
+    backend. Backend is configured with `STATIC_ASSETS_BASE_URL`
+  - `/login` - this is forwarded to the application backend and is intended for
+    serving a welcome/login page. When user requests login, the application
+    backend should redirect to `/auth/login`
+  - `GET /auth/login`, `GET /auth/callback` - OIDC/Oauth2 initiation and
+    callback
+  - `GET /auth/me` (returns `401` when not logged in) and returns OIDC ID token
+    claims when logged in.
+  - `/healthz` health endpoint for the BFF.
+- Protected SPA navigation: all other non-API routes (including `/`) require a
+  valid BFF session; unauthenticated requests are redirected to `GET /login`.
+- API proxy paths: `/api` and `/api/*` are reverse-proxied to `API_BASE_URL`
+  with `Authorization: Bearer <access_token>` injected from the server-side
   session.
-- `/api` and `/api/*`: reverse-proxied to `API_BASE_URL` with
-  `Authorization: Bearer <access_token>` injected from session.
-- `/` and non-API paths: reverse-proxied to `STATIC_ASSETS_BASE_URL` (SPA/static
-  assets).
+- CSRF-protected writes: non-GET/HEAD/OPTIONS requests to `/api/*` and
+  `POST /auth/logout` must include `X-CSRF-Token` matching the session CSRF
+  token (set in the `csrf_token` cookie after login).
+
+Unauthenticated user opening `/` and signing in:
+
+```text
+Browser            BFF (:8080)          Static App (:8082)   IdP (:5001)
+   |                   |                      |                   |
+   |-- GET / --------->| (no session)         |                   |
+   |<- 303 /login -----|                      |                   |
+   |                   |                      |                   |
+   |-- GET /login ---->|                      |                   |
+   |                   |-- GET /login ------->|                   |
+   |<- 200 (welcome) --|<- 200 ---------------|                   |
+   |                   |                      |                   |
+   | (user clicks login button)               |                   |
+   |-- GET /auth/login>|                      |                   |
+   |<- 303 /authorize--|                      |                   |
+   |                   |                      |                   |
+   |-- GET /authorize ------------------------------------------->|
+   |<- 200 (login form) ------------------------------------------|
+   |                   |                      |                   |
+   | (user submits credentials)               |                   |
+   |-- POST /... ------------------------------------------------>|
+   |<- 302 /auth/callback?code=... -------------------------------|
+   |                   |                      |                   |
+   |-- GET /auth/callback?code=...>|          |                   |
+   |                   |-- POST /token -------------------------->|
+   |                   |<- tokens --------------------------------|
+   |                   | (create session, set session cookie,     |
+   |                   |  set csrf_token cookie)                  |
+   |<- 303 / ----------|                      |                   |
+   |                   |                      |                   |
+   |-- GET / --------->|                      |                   |
+   |                   |-- GET / ------------>|                   |
+   |<- 200 (app) ------|<- 200 ---------------|                   |
+```
+
+Checking auth state from the SPA (`GET /auth/me`):
+
+```text
+Browser/SPA       BFF (:8080)
+   |                  |
+   |-- GET /auth/me ->|
+   |<- 200 {claims} --|  (when session is valid)
+   |<- 401 -----------|  (when no valid session)
+```
+
+Authenticated API request through the BFF (`/api/*`):
+
+```text
+Browser/SPA       BFF (:8080)         API (:8081)
+   |                  |                   |
+   |-- GET /api/data->|                   |
+   |                  | (check session)   |
+   |                  |-- GET /api/data ->|
+   |                  |   Authorization: Bearer <access_token>
+   |                  |<- 200 ------------|
+   |<- 200 -----------|                   |
+```
+
+State-changing requests from the SPA (for example `POST /api/*` or
+`POST /auth/logout`) must include `X-CSRF-Token` from the `csrf_token` cookie.
 
 ASCII architecture:
 
