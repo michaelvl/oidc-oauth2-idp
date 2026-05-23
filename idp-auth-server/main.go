@@ -428,7 +428,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	s.authContext[reqID] = ctx
 	s.mu.Unlock()
 
-	idTokenClaimsJSON, err := claimsToPrettyJSON(defaultIDTokenClaims(subject, ctx.Scope, ctx.ClientID, ctx.Nonce))
+	idTokenClaimsJSON, err := claimsToPrettyJSON(defaultIDTokenClaims(subject, ctx.Scope, ctx.ClientID, ctx.Nonce, s.externalURL))
 	if err != nil {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
@@ -653,7 +653,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		scope = clientSess.Scope
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
-			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce)
+			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce, s.externalURL)
 		}
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
@@ -695,7 +695,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		nonce, _ = refreshClaims["nonce"].(string)
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
-			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce)
+			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce, s.externalURL)
 		}
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
@@ -1106,7 +1106,7 @@ func hasScope(scope, target string) bool {
 	return false
 }
 
-func defaultIDTokenClaims(subject, scope, clientID, nonce string) map[string]any {
+func defaultIDTokenClaims(subject, scope, clientID, nonce, externalURL string) map[string]any {
 	claims := map[string]any{
 		"azp": clientID,
 	}
@@ -1116,6 +1116,7 @@ func defaultIDTokenClaims(subject, scope, clientID, nonce string) map[string]any
 	if strings.Contains(scope, "profile") {
 		claims["name"] = fmt.Sprintf("Name of user %s", capitalize(subject))
 		claims["preferred_username"] = capitalize(subject)
+		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(subject))
 	}
 	return claims
 }
