@@ -5,7 +5,11 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -233,5 +237,86 @@ func TestDedupeStrings(t *testing.T) {
 	want := []string{"a", "b", "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected dedupe result: got=%v want=%v", got, want)
+	}
+}
+
+func TestAvatarRequiresBearerWhenProtected(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	templatesDir := t.TempDir()
+	avatarDir := filepath.Join(templatesDir, "avatars")
+	if err := os.MkdirAll(avatarDir, 0o755); err != nil {
+		t.Fatalf("mkdir avatars: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(avatarDir, "1.svg"), []byte("<svg></svg>"), 0o644); err != nil {
+		t.Fatalf("write avatar: %v", err)
+	}
+
+	srv := &server{
+		templatesDir:       templatesDir,
+		protectPictureURL: true,
+		privateKey:        key,
+		publicKey:         &key.PublicKey,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/avatars/1.svg", nil)
+	rec := httptest.NewRecorder()
+
+	srv.avatar(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
+		t.Fatalf("expected WWW-Authenticate Bearer, got %q", got)
+	}
+}
+
+func TestAvatarAcceptsBearerWhenProtected(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	templatesDir := t.TempDir()
+	avatarDir := filepath.Join(templatesDir, "avatars")
+	if err := os.MkdirAll(avatarDir, 0o755); err != nil {
+		t.Fatalf("mkdir avatars: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(avatarDir, "1.svg"), []byte("<svg></svg>"), 0o644); err != nil {
+		t.Fatalf("write avatar: %v", err)
+	}
+
+	srv := &server{
+		externalURL:        "http://127.0.0.1:5001",
+		templatesDir:       templatesDir,
+		protectPictureURL: true,
+		privateKey:        key,
+		publicKey:         &key.PublicKey,
+	}
+
+	token, _, err := srv.issueToken("alice", []string{"api"}, map[string]any{"scope": "openid profile"}, time.Now().Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/avatars/1.svg", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.avatar(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "image/svg+xml") {
+		t.Fatalf("expected image/svg+xml content type, got %q", got)
 	}
 }

@@ -74,6 +74,7 @@ type server struct {
 
 	appPort     string
 	externalURL string
+	protectPictureURL bool
 	extraAudiences []string
 
 	accessTokenLifetime  int
@@ -165,6 +166,7 @@ func main() {
 func newServer() (*server, error) {
 	appPort := getenvDefault("PORT", "5001")
 	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
+	protectPictureURL := getenvDefaultBool("PROTECT_PICTURE_URL", false)
 	extraAudiences := getenvCSV("EXTRA_AUDIENCES")
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
@@ -189,6 +191,7 @@ func newServer() (*server, error) {
 		templatesDir:         templatesDir,
 		appPort:              appPort,
 		externalURL:          externalURL,
+		protectPictureURL:    protectPictureURL,
 		extraAudiences:       extraAudiences,
 		accessTokenLifetime:  accessLifetime,
 		refreshTokenLifetime: refreshLifetime,
@@ -290,6 +293,22 @@ func (s *server) avatar(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+
+	if s.protectPictureURL {
+		auth := r.Header.Get("Authorization")
+		parts := strings.Fields(auth)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if _, err := s.decodeJWT(parts[1], s.publicKey); err != nil {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	// Extract filename from path (e.g. /avatars/3.svg -> 3.svg)
 	name := filepath.Base(r.URL.Path)
 	w.Header().Set("Content-Type", "image/svg+xml")
@@ -1184,6 +1203,18 @@ func getenvDefaultInt(name string, def int) int {
 		return def
 	}
 	return n
+}
+
+func getenvDefaultBool(name string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 func capitalize(s string) string {
