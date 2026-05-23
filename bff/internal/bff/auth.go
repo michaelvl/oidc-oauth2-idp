@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ type Dependencies struct {
 	ExchangeCode       func(ctx context.Context, code, verifier string) (*oauth2.Token, error)
 	VerifyIDToken      func(ctx context.Context, rawIDToken string) (session.UserClaims, error)
 	EndSessionEndpoint string
+	AvatarHTTPClient   *http.Client
 	InsecureCookies    bool
 }
 
@@ -154,9 +156,71 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user := current.User
+	if user.Picture != "" {
+		user.Picture = "/auth/avatar"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(current.User)
+	_ = json.NewEncoder(w).Encode(user)
+}
+
+func (h *Handler) Avatar(w http.ResponseWriter, r *http.Request) {
+	current, ok, err := h.deps.Sessions.Get(r)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if !ok {
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if current.User.Picture == "" {
+		h.writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	pictureURL, err := url.Parse(current.User.Picture)
+	if err != nil || pictureURL.Scheme == "" || pictureURL.Host == "" || (pictureURL.Scheme != "http" && pictureURL.Scheme != "https") {
+		h.writeError(w, http.StatusBadGateway, "bad gateway")
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, pictureURL.String(), nil)
+	if err != nil {
+		h.writeError(w, http.StatusBadGateway, "bad gateway")
+		return
+	}
+	if current.AccessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+current.AccessToken)
+	}
+
+	client := h.deps.AvatarHTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		h.writeError(w, http.StatusBadGateway, "bad gateway")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		h.writeError(w, http.StatusBadGateway, "bad gateway")
+		return
+	}
+
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if cacheControl := resp.Header.Get("Cache-Control"); cacheControl != "" {
+		w.Header().Set("Cache-Control", cacheControl)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 func (h *Handler) readClaims(ctx context.Context, tokenSet *oauth2.Token) (session.UserClaims, string, error) {

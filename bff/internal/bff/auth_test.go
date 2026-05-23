@@ -3,6 +3,7 @@ package bff
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -157,6 +158,9 @@ func TestAuthMe_ReturnsClaimsWhenAuthenticated(t *testing.T) {
 	if body["sub"] != "abc" || body["email"] != "alice@example.com" {
 		t.Fatalf("unexpected body: %+v", body)
 	}
+	if body["picture"] != "/auth/avatar" {
+		t.Fatalf("expected proxied picture path, got %q", body["picture"])
+	}
 }
 
 func TestAuthMe_Returns401WhenNoSession(t *testing.T) {
@@ -220,5 +224,99 @@ func TestAuthLogout_DestroysSessionAndRedirects(t *testing.T) {
 	want := "https://idp.example/logout?id_token_hint=raw.id.token"
 	if got := body["redirectTo"]; got != want {
 		t.Fatalf("expected redirectTo %q, got %q", want, got)
+	}
+}
+
+func TestAuthAvatar_ProxiesWithAccessToken(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager := session.NewManager(store, "session", "01234567890123456789012345678901", true)
+
+	avatarUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Fatalf("expected bearer token to be forwarded, got %q", got)
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "private, max-age=60")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "<svg></svg>")
+	}))
+	defer avatarUpstream.Close()
+
+	h := New(Dependencies{
+		Logger:           slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
+		Sessions:         manager,
+		AuthCodeURL:      func(_, _ string) string { return "" },
+		ExchangeCode:     func(context.Context, string, string) (*oauth2.Token, error) { return nil, nil },
+		VerifyIDToken:    func(context.Context, string) (session.UserClaims, error) { return session.UserClaims{}, nil },
+		AvatarHTTPClient: avatarUpstream.Client(),
+		InsecureCookies:  true,
+	})
+
+	seed := httptest.NewRecorder()
+	if err := manager.Create(seed, session.Session{
+		AccessToken: "access-token",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		CSRFToken:   "csrf",
+		User: session.UserClaims{
+			Sub:     "abc",
+			Picture: avatarUpstream.URL + "/avatar.svg",
+		},
+	}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/avatar", nil)
+	for _, c := range seed.Result().Cookies() {
+		if c.Name == "session" {
+			req.AddCookie(c)
+		}
+	}
+	rec := httptest.NewRecorder()
+
+	h.Avatar(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/svg+xml" {
+		t.Fatalf("expected content type to be preserved, got %q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=60" {
+		t.Fatalf("expected cache control to be preserved, got %q", got)
+	}
+	if got := rec.Body.String(); got != "<svg></svg>" {
+		t.Fatalf("unexpected body %q", got)
+	}
+}
+
+func TestAuthAvatar_Returns404WhenNoPicture(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager := session.NewManager(store, "session", "01234567890123456789012345678901", true)
+	h := New(Dependencies{
+		Logger:        slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
+		Sessions:      manager,
+		AuthCodeURL:   func(_, _ string) string { return "" },
+		ExchangeCode:  func(context.Context, string, string) (*oauth2.Token, error) { return nil, nil },
+		VerifyIDToken: func(context.Context, string) (session.UserClaims, error) { return session.UserClaims{}, nil },
+		InsecureCookies: true,
+	})
+
+	seed := httptest.NewRecorder()
+	if err := manager.Create(seed, session.Session{AccessToken: "token", ExpiresAt: time.Now().Add(time.Hour), CSRFToken: "csrf", User: session.UserClaims{Sub: "sub-1"}}); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/avatar", nil)
+	for _, c := range seed.Result().Cookies() {
+		if c.Name == "session" {
+			req.AddCookie(c)
+		}
+	}
+	rec := httptest.NewRecorder()
+
+	h.Avatar(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
 }

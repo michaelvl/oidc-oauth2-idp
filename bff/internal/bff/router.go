@@ -14,6 +14,7 @@ func RegisterRoutes(mux *http.ServeMux, staticAssetsHandler http.Handler, auth *
 		mux.HandleFunc("GET /auth/callback", auth.Callback)
 		mux.HandleFunc("POST /auth/logout", auth.Logout)
 		mux.HandleFunc("GET /auth/me", auth.Me)
+		mux.HandleFunc("GET /auth/avatar", auth.Avatar)
 	}
 
 	if apiProxy != nil {

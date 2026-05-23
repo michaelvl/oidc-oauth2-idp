@@ -70,8 +70,13 @@ Request flows and path handling:
     backend should redirect to `/auth/login`
   - `GET /auth/login`, `GET /auth/callback` - OIDC/Oauth2 initiation and
     callback
-  - `GET /auth/me` (returns `401` when not logged in) and returns OIDC ID token
-    claims when logged in.
+  - `GET /auth/me` (returns `401` when not logged in) and returns OIDC claims
+    when logged in. When a `picture` claim exists, its value is rewritten to the
+    BFF-local avatar endpoint (`/auth/avatar`) so the SPA does not need to load
+    IdP-origin image URLs directly.
+  - `GET /auth/avatar` (returns `401` when not logged in, `404` when no picture
+    claim is present) and proxies the user's avatar from the upstream IdP using
+    the current session access token.
   - `/healthz` health endpoint for the BFF.
 - Protected SPA navigation: all other non-API routes (including `/`) require a
   valid BFF session; unauthenticated requests are redirected to `GET /login`.
@@ -142,6 +147,14 @@ Browser/SPA       BFF (:8080)         API (:8081)
 
 State-changing requests from the SPA (for example `POST /api/*` or
 `POST /auth/logout`) must include `X-CSRF-Token` from the `csrf_token` cookie.
+
+Security headers added by the BFF (all responses):
+
+- `Strict-Transport-Security: max-age=63072000; includeSubDomains`
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'`
+- `Referrer-Policy: strict-origin-when-cross-origin`
 
 ASCII architecture:
 
