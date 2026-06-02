@@ -79,6 +79,56 @@ func TestAuthCallback_SetsSessionAndCSRFCookie(t *testing.T) {
 	}
 }
 
+func TestAuthCallback_RejectsDuplicateStateBeforeTokenExchange(t *testing.T) {
+	store := session.NewMemoryStore()
+	manager := session.NewManager(store, "session", "01234567890123456789012345678901", true)
+
+	exchangeCalls := 0
+	h := New(Dependencies{
+		Logger:      slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
+		Sessions:    manager,
+		AuthCodeURL: func(state, _ string) string { return "https://idp.example/auth?state=" + state },
+		ExchangeCode: func(_ context.Context, code, _ string) (*oauth2.Token, error) {
+			exchangeCalls++
+			if code != "duplicate-code" {
+				t.Fatalf("unexpected code: %s", code)
+			}
+			return &oauth2.Token{AccessToken: "access", RefreshToken: "refresh", Expiry: time.Now().Add(1 * time.Hour)}, nil
+		},
+		VerifyIDToken: func(_ context.Context, raw string) (session.UserClaims, error) {
+			if raw != "" {
+				t.Fatalf("expected empty raw id token in test, got: %s", raw)
+			}
+			return session.UserClaims{Sub: "user-1"}, nil
+		},
+		InsecureCookies: true,
+	})
+
+	req1 := httptest.NewRequest(http.MethodGet, "/auth/callback?code=duplicate-code&state=shared-state", nil)
+	req1.AddCookie(&http.Cookie{Name: stateCookieName, Value: "shared-state"})
+	req1.AddCookie(&http.Cookie{Name: verifierCookieName, Value: "test-verifier"})
+	rec1 := httptest.NewRecorder()
+	h.Callback(rec1, req1)
+
+	if rec1.Code != http.StatusSeeOther {
+		t.Fatalf("expected first callback status %d, got %d", http.StatusSeeOther, rec1.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/auth/callback?code=duplicate-code&state=shared-state", nil)
+	req2.AddCookie(&http.Cookie{Name: stateCookieName, Value: "shared-state"})
+	req2.AddCookie(&http.Cookie{Name: verifierCookieName, Value: "test-verifier"})
+	rec2 := httptest.NewRecorder()
+	h.Callback(rec2, req2)
+
+	if rec2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected second callback status %d, got %d", http.StatusUnauthorized, rec2.Code)
+	}
+
+	if exchangeCalls != 1 {
+		t.Fatalf("expected token exchange to be called once, got %d", exchangeCalls)
+	}
+}
+
 func TestAuthLogin_RedirectsToOIDCProvider(t *testing.T) {
 	h := New(Dependencies{
 		Logger:   slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
