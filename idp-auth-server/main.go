@@ -72,10 +72,10 @@ type server struct {
 	templates    map[string]*template.Template
 	templatesDir string
 
-	appPort     string
-	externalURL string
+	appPort           string
+	externalURL       string
 	protectPictureURL bool
-	extraAudiences []string
+	extraAudiences    []string
 
 	accessTokenLifetime  int
 	refreshTokenLifetime int
@@ -371,6 +371,8 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	if sess, ok := s.sessions[sessionCookie]; ok {
+		sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
+		s.sessions[sessionCookie] = sess
 		s.mu.Unlock()
 		log.Printf("This is an existing session identified by the session cookie, short-cutting login process...")
 		s.issueCodeAndRedirect(w, r, sess, clientID, state, nonce)
@@ -396,6 +398,8 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		existingSessionID := s.getSessionBySubjectLocked(subject)
 		if existingSessionID != "" {
 			sess := s.sessions[existingSessionID]
+			sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
+			s.sessions[existingSessionID] = sess
 			s.mu.Unlock()
 			log.Printf("Found existing session %s", existingSessionID)
 			s.issueCodeAndRedirect(w, r, sess, clientID, state, nonce)
@@ -531,9 +535,9 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		sessionID = uuid.NewString()
 	}
-		sess := session{
-			Subject:   subject,
-			SessionID: sessionID,
+	sess := session{
+		Subject:   subject,
+		SessionID: sessionID,
 		ClientSessions: []clientSession{{
 			ClientID:            ctx.ClientID,
 			Scope:               ctx.Scope,
@@ -658,7 +662,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			case "S256":
 				digest := sha256.Sum256([]byte(codeVerifier))
 				ourCodeChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
-				log.Printf("Self-encoded challenge '%s', got challenge '%s'", ourCodeChallenge, clientSess.CodeChallenge)
+				log.Printf("PKCE S256: derived '%s', stored '%s'", ourCodeChallenge, clientSess.CodeChallenge)
 				if ourCodeChallenge != clientSess.CodeChallenge {
 					writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 					return
@@ -928,7 +932,7 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"scopes_supported":                      []string{"openid", "profile", "offline_access"},
 		"claims_supported":                      []string{"sub", "name", "picture"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -1025,6 +1029,17 @@ func getClientSessionByID(sess session, clientID string) *clientSession {
 		}
 	}
 	return nil
+}
+
+func updateClientSessionPKCE(sess session, clientID, codeChallenge, codeChallengeMethod string) session {
+	for i := range sess.ClientSessions {
+		if sess.ClientSessions[i].ClientID == clientID {
+			sess.ClientSessions[i].CodeChallenge = codeChallenge
+			sess.ClientSessions[i].CodeChallengeMethod = codeChallengeMethod
+			break
+		}
+	}
+	return sess
 }
 
 func renderTemplate(w http.ResponseWriter, tpl *template.Template, data any) {

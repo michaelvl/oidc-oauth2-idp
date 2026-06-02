@@ -33,14 +33,15 @@ type Dependencies struct {
 }
 
 type Handler struct {
-	deps Dependencies
+	deps        Dependencies
+	stateClaims *stateClaims
 }
 
 func New(deps Dependencies) *Handler {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	return &Handler{deps: deps}
+	return &Handler{deps: deps, stateClaims: newStateClaims(oidcStateClaimTTL)}
 }
 
 // Login flow starts here
@@ -74,6 +75,12 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
 		h.logAuthFailure(r, "missing_code", nil)
+		h.writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if !h.stateClaims.Claim(stateCookie.Value) {
+		h.logAuthFailure(r, "duplicate_state", nil)
 		h.writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
