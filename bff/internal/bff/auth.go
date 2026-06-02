@@ -206,7 +206,9 @@ func (h *Handler) Avatar(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusBadGateway, "bad gateway")
 		return
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		h.writeError(w, http.StatusBadGateway, "bad gateway")

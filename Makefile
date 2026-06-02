@@ -11,7 +11,7 @@ KO_BFF_IMPORTPATH ?= ./bff/cmd/bff
 KO_DOCKER_REPO ?= ko.local
 KO_TAGS ?= latest
 
-.PHONY: help tidy fmt lint test build build-bff run run-bff container container-bff clean
+.PHONY: help tidy fmt lint test build build-bff run run-bff container-idp container-bff containers clean
 
 help:
 	@printf "Targets:\n"
@@ -23,8 +23,9 @@ help:
 	@printf "  make build-bff - build bff binary\n"
 	@printf "  make run    - run server locally\n"
 	@printf "  make run-bff - run bff locally\n"
-	@printf "  make container - publish with ko\n"
+	@printf "  make container-idp - publish idp container with ko\n"
 	@printf "  make container-bff - publish bff with ko\n"
+	@printf "  make containers - publish idp and bff containers with ko\n"
 	@printf "  make clean  - remove build artifacts\n"
 
 tidy:
@@ -53,11 +54,13 @@ run:
 run-bff:
 	go run $(BFF_PKG)
 
-container:
+container-idp:
 	KO_CONFIG_PATH=$(KO_CONFIG_PATH) KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish --base-import-paths --tags="$(KO_TAGS)" "$(KO_IMPORTPATH)"
 
 container-bff:
 	KO_CONFIG_PATH=$(KO_CONFIG_PATH) KO_DOCKER_REPO=$(KO_DOCKER_REPO) ko publish --base-import-paths --tags="$(KO_TAGS)" "$(KO_BFF_IMPORTPATH)"
+
+containers: container-idp container-bff
 
 clean:
 	rm -rf $(BIN_DIR)

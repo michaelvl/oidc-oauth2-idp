@@ -58,7 +58,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("initialize static assets proxy: %w", err)
 	}
 
-	handler := server.NewBFF(staticAssetsProxy, authHandler, apiProxy)
+	handler := server.NewBFF(logger, staticAssetsProxy, authHandler, apiProxy)
 	addr := ":" + serverCfg.Port
 
 	logger.Info("starting bff", "addr", addr)

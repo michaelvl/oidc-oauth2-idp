@@ -8,7 +8,7 @@ import (
 )
 
 func TestHealthz_ReturnsOK(t *testing.T) {
-	h := NewBFF(staticHandler(t, "<html>ok</html>"), nil, nil)
+	h := NewBFF(nil, staticHandler(t, "<html>ok</html>"), nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 
@@ -20,7 +20,7 @@ func TestHealthz_ReturnsOK(t *testing.T) {
 }
 
 func TestRoot_ReturnsIndex(t *testing.T) {
-	h := NewBFF(staticHandler(t, "<html>placeholder</html>"), nil, nil)
+	h := NewBFF(nil, staticHandler(t, "<html>placeholder</html>"), nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -35,7 +35,7 @@ func TestRoot_ReturnsIndex(t *testing.T) {
 }
 
 func TestSPAFallback_NonAPIPathReturnsIndex(t *testing.T) {
-	h := NewBFF(staticHandler(t, "<html>fallback</html>"), nil, nil)
+	h := NewBFF(nil, staticHandler(t, "<html>fallback</html>"), nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
 
@@ -50,7 +50,7 @@ func TestSPAFallback_NonAPIPathReturnsIndex(t *testing.T) {
 }
 
 func TestSPAFallback_APIPathIsNotIntercepted(t *testing.T) {
-	h := NewBFF(staticHandler(t, "<html>fallback</html>"), nil, nil)
+	h := NewBFF(nil, staticHandler(t, "<html>fallback</html>"), nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil)
 

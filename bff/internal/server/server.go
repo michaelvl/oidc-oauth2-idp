@@ -1,13 +1,14 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 
 	"oidc-oauth2-idp/bff/internal/bff"
 	"oidc-oauth2-idp/bff/internal/middleware"
 )
 
-func NewBFF(staticAssetsHandler http.Handler, auth *bff.Handler, apiProxy http.Handler) http.Handler {
+func NewBFF(logger *slog.Logger, staticAssetsHandler http.Handler, auth *bff.Handler, apiProxy http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -18,5 +19,5 @@ func NewBFF(staticAssetsHandler http.Handler, auth *bff.Handler, apiProxy http.H
 	}
 
 	stack := bff.BuildMiddlewareStack(auth, middleware.Recovery(nil))
-	return stack(mux)
+	return middleware.RequestLogger(logger)(stack(mux))
 }
