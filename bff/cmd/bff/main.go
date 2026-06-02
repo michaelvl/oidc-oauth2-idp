@@ -2,10 +2,12 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"oidc-oauth2-idp/bff/internal/bff"
 	"oidc-oauth2-idp/bff/internal/config"
@@ -14,10 +16,34 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logLevel, err := parseLogLevelFlag()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(2)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	if err := run(logger); err != nil {
 		logger.Error("bff exited with error", "error", err.Error())
 		os.Exit(1)
+	}
+}
+
+func parseLogLevelFlag() (slog.Level, error) {
+	logLevelFlag := flag.String("log-level", "info", "log level: debug|info|warn|error")
+	flag.Parse()
+
+	switch strings.ToLower(strings.TrimSpace(*logLevelFlag)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid --log-level %q (expected: debug, info, warn, error)", *logLevelFlag)
 	}
 }
 

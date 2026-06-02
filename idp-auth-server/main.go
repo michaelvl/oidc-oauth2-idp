@@ -7,10 +7,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"html/template"
 	"io"
-	"log"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -64,6 +65,8 @@ type codeMetadataEntry struct {
 
 type server struct {
 	mu sync.Mutex
+
+	logger *slog.Logger
 
 	authContext map[string]authContextEntry
 	codeMeta    map[string]codeMetadataEntry
@@ -132,9 +135,18 @@ type errorData struct {
 }
 
 func main() {
-	srv, err := newServer()
+	logLevel, err := parseLogLevelFlag()
 	if err != nil {
-		log.Fatalf("startup failed: %v", err)
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(2)
+	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+
+	srv, err := newServer(logger)
+	if err != nil {
+		logger.Error("startup failed", "error", err.Error())
+		os.Exit(1)
 	}
 
 	mux := http.NewServeMux()
@@ -155,15 +167,34 @@ func main() {
 		mux.HandleFunc(path, srv.avatar)
 	}
 
-	handler := withCORS(withLogging(mux))
+	handler := withCORS(withLogging(logger, mux))
 
-	log.Printf("listening on 0.0.0.0:%s", srv.appPort)
+	logger.Info("listening", "addr", "0.0.0.0:"+srv.appPort)
 	if err := http.ListenAndServe("0.0.0.0:"+srv.appPort, handler); err != nil {
-		log.Fatal(err)
+		logger.Error("server exited", "error", err.Error())
+		os.Exit(1)
 	}
 }
 
-func newServer() (*server, error) {
+func parseLogLevelFlag() (slog.Level, error) {
+	logLevelFlag := flag.String("log-level", "info", "log level: debug|info|warn|error")
+	flag.Parse()
+
+	switch strings.ToLower(strings.TrimSpace(*logLevelFlag)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid --log-level %q (expected: debug, info, warn, error)", *logLevelFlag)
+	}
+}
+
+func newServer(logger *slog.Logger) (*server, error) {
 	appPort := getenvDefault("PORT", "5001")
 	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
 	protectPictureURL := getenvDefaultBool("PROTECT_PICTURE_URL", false)
@@ -171,7 +202,7 @@ func newServer() (*server, error) {
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
-	log.Printf("Generate keys")
+	logger.Info("generating keys")
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -184,6 +215,7 @@ func newServer() (*server, error) {
 	}
 
 	return &server{
+		logger:               logger,
 		authContext:          map[string]authContextEntry{},
 		codeMeta:             map[string]codeMetadataEntry{},
 		sessions:             map[string]session{},
@@ -226,9 +258,13 @@ func withCORS(next http.Handler) http.Handler {
 	})
 }
 
-func withLogging(next http.Handler) http.Handler {
+func withLogging(logger *slog.Logger, next http.Handler) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s", r.Method, r.URL.Path)
+		logger.Info("request", "method", r.Method, "path", r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -335,7 +371,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	sessionID := r.Form.Get("sessionid")
-	log.Printf("Logout, session: %s", sessionID)
+	s.log().Info("logout", "session_id", sessionID)
 
 	s.mu.Lock()
 	delete(s.sessions, sessionID)
@@ -367,31 +403,31 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		sessionCookie = cookie.Value
 	}
 
-	log.Printf("Session cookie: %s", sessionCookie)
+	s.log().Debug("authorize session cookie", "session_cookie", sessionCookie)
 
 	s.mu.Lock()
 	if sess, ok := s.sessions[sessionCookie]; ok {
 		sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
 		s.sessions[sessionCookie] = sess
 		s.mu.Unlock()
-		log.Printf("This is an existing session identified by the session cookie, short-cutting login process...")
+		s.log().Info("authorize with existing session cookie", "session_id", sessionCookie)
 		s.issueCodeAndRedirect(w, r, sess, clientID, state, nonce)
 		return
 	}
 	s.mu.Unlock()
 
-	log.Printf("No session cookie")
+	s.log().Debug("authorize without session cookie")
 	if prompt == "none" {
 		idTokenHint := r.PostFormValue("id_token_hint")
 		idTokenClaims, err := s.decodeJWT(idTokenHint, s.publicKey)
 		if err != nil {
-			log.Printf("error decoding id_token_hint: %v", err)
+			s.log().Warn("failed to decode id_token_hint", "error", err.Error())
 			redirURL := buildURL(redirectURI, map[string]string{"error": "login_required", "state": state})
 			http.Redirect(w, r, redirURL, http.StatusSeeOther)
 			return
 		}
 
-		log.Printf("ID token hint claims: %v", idTokenClaims)
+		s.log().Debug("id_token_hint claims", "claims", idTokenClaims)
 
 		subject, _ := idTokenClaims["sub"].(string)
 		s.mu.Lock()
@@ -401,13 +437,13 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 			sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
 			s.sessions[existingSessionID] = sess
 			s.mu.Unlock()
-			log.Printf("Found existing session %s", existingSessionID)
+			s.log().Info("found existing session by subject", "session_id", existingSessionID)
 			s.issueCodeAndRedirect(w, r, sess, clientID, state, nonce)
 			return
 		}
 		s.mu.Unlock()
 
-		log.Printf("No existing session found")
+		s.log().Info("no existing session found for subject")
 		w.Header().Set("Content-Type", "application/x-www-form-urlencoded")
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte("error=login_required"))
@@ -426,7 +462,7 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Unlock()
 
-	log.Printf("AUTHENTICATE: Requesting login. Scope: '%s', client-id: '%s', state: %s, using request id: %s", scope, clientID, state, reqID)
+	s.log().Info("requesting login", "scope", scope, "client_id", clientID, "state", state, "request_id", reqID)
 	renderTemplate(w, s.templates["authenticate"], authenticateData{ReqID: reqID})
 }
 
@@ -462,7 +498,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("LOGIN: Requesting authorization. Scope: '%s', client-id: '%s', state: %s, using request id: %s", ctx.Scope, ctx.ClientID, ctx.State, reqID)
+	s.log().Info("requesting authorization", "scope", ctx.Scope, "client_id", ctx.ClientID, "state", ctx.State, "request_id", reqID)
 	renderTemplate(w, s.templates["authorize"], authorizeData{
 		ClientID:              ctx.ClientID,
 		Scope:                 ctx.Scope,
@@ -490,7 +526,7 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subject := ctx.Subject
-	log.Printf("APPROVE: User: '%s', request id: %s", subject, reqID)
+	s.log().Info("approve request", "subject", subject, "request_id", reqID)
 
 	if _, ok := r.Form["approve"]; !ok {
 		renderTemplate(w, s.templates["error"], errorData{Text: "Not approved"})
@@ -551,8 +587,8 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 	s.sessions[sessionID] = sess
 	s.mu.Unlock()
 
-	log.Printf("User: '%s' authorized scope: '%s' for client_id: '%s'", subject, ctx.Scope, ctx.ClientID)
-	log.Printf("Created session %s", sessionID)
+	s.log().Info("user authorized", "subject", subject, "scope", ctx.Scope, "client_id", ctx.ClientID)
+	s.log().Info("created session", "session_id", sessionID)
 
 	s.issueCodeAndRedirect(w, r, sess, ctx.ClientID, ctx.State, ctx.Nonce)
 }
@@ -571,7 +607,7 @@ func (s *server) issueCodeAndRedirect(w http.ResponseWriter, r *http.Request, se
 	}
 
 	redirURL := buildURL(clientSess.RedirectURI, map[string]string{"code": code, "state": state})
-	log.Printf("Redirecting to callback '%s'", redirURL)
+	s.log().Debug("redirecting to callback", "redirect_url", redirURL)
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
@@ -588,15 +624,15 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	logRequest("GET-TOKEN", r)
+	logRequest(s.log(), "token", r)
 	_ = r.ParseForm()
 
 	clientAuth := r.Header.Get("Authorization")
-	log.Printf("GET-TOKEN: Client auth: '%s'", clientAuth)
+	s.log().Debug("get-token client auth", "authorization", clientAuth)
 	// FIXME: Validate client authentication (client_secret_basic or client_secret_post).
 
 	grantType := r.Form.Get("grant_type")
-	log.Printf("GET-TOKEN: Grant type: '%s'", grantType)
+	s.log().Debug("get-token grant type", "grant_type", grantType)
 
 	var (
 		subject         string
@@ -625,13 +661,13 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 
 		if !ok {
-			log.Printf("GET-TOKEN: Invalid code: '%s'", code)
+			s.log().Warn("get-token invalid code", "code", code)
 			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 			return
 		}
 		// FIXME: Validate that the authorization code has not expired (track issued-at in codeMeta).
 
-		log.Printf("GET-TOKEN: Valid code: '%s'", code)
+		s.log().Debug("get-token valid code", "code", code)
 		sessionID = meta.SessionID
 		clientID = meta.ClientID
 		nonce = meta.Nonce
@@ -652,7 +688,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if clientSess.CodeChallenge != "" {
-			log.Printf("GET-TOKEN: Challenge '%s', verifier '%s', method '%s'", clientSess.CodeChallenge, codeVerifier, clientSess.CodeChallengeMethod)
+			s.log().Debug("get-token verifying pkce", "challenge", clientSess.CodeChallenge, "verifier", codeVerifier, "method", clientSess.CodeChallengeMethod)
 			switch clientSess.CodeChallengeMethod {
 			case "plain":
 				if codeVerifier != clientSess.CodeChallenge {
@@ -662,7 +698,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			case "S256":
 				digest := sha256.Sum256([]byte(codeVerifier))
 				ourCodeChallenge := base64.RawURLEncoding.EncodeToString(digest[:])
-				log.Printf("PKCE S256: derived '%s', stored '%s'", ourCodeChallenge, clientSess.CodeChallenge)
+				s.log().Debug("pkce s256 challenge comparison", "derived", ourCodeChallenge, "stored", clientSess.CodeChallenge)
 				if ourCodeChallenge != clientSess.CodeChallenge {
 					writeOAuthError(w, http.StatusForbidden, "invalid_grant")
 					return
@@ -687,7 +723,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	case "refresh_token":
 		refreshToken := r.Form.Get("refresh_token")
-		log.Printf("GET-TOKEN: Refresh token %s", refreshToken)
+		s.log().Debug("get-token refresh token", "refresh_token", refreshToken)
 
 		refreshClaims, err := s.decodeJWT(refreshToken, s.publicKey)
 		if err != nil {
@@ -701,7 +737,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		sess, ok := s.sessions[sessionID]
 		s.mu.Unlock()
 		if !ok {
-			log.Printf("GET-TOKEN: Invalid session, cannot refresh tokens: '%s'", sessionID)
+			s.log().Warn("get-token invalid session for refresh", "session_id", sessionID)
 			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
 			return
 		}
@@ -728,12 +764,12 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		refreshLifetime = intFromAny(refreshClaims["refresh_token_lifetime"], s.refreshTokenLifetime)
 
 	default:
-		log.Printf("GET-TOKEN: Invalid grant type: '%s'", grantType)
+		s.log().Warn("get-token invalid grant type", "grant_type", grantType)
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type")
 		return
 	}
 
-	log.Printf("GET-TOKEN: Issuing tokens!")
+	s.log().Info("issuing tokens", "grant_type", grantType, "client_id", clientID)
 	accessAud := dedupeStrings(append([]string{s.externalURL + "/userinfo"}, s.extraAudiences...))
 	accessToken, issuedAccessClaims, err := s.issueToken(subject, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
 	if err != nil {
@@ -805,10 +841,10 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	logRequest("GET-USERINFO", r)
+	logRequest(s.log(), "userinfo", r)
 
 	auth := r.Header.Get("Authorization")
-	log.Printf("GET-USERINFO: Access token: '%s'", auth)
+	s.log().Debug("get-userinfo access token", "authorization", auth)
 
 	parts := strings.Fields(auth)
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
@@ -824,9 +860,9 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scope, _ := claims["scope"].(string)
-	log.Printf("GET-USERINFO: Access token audience: '%v'", claims["aud"])
+	s.log().Debug("get-userinfo access token audience", "audience", claims["aud"])
 	// FIXME: Validate that the access token audience includes the /userinfo endpoint.
-	log.Printf("GET-USERINFO: Scope '%s'", scope)
+	s.log().Debug("get-userinfo scope", "scope", scope)
 
 	out := map[string]any{}
 	sub, _ := claims["sub"].(string)
@@ -856,7 +892,7 @@ func (s *server) endsession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("END-SESSION: ID token hint claims: %v", claims)
+	s.log().Debug("end-session id token hint claims", "claims", claims)
 	sub, _ := claims["sub"].(string)
 
 	s.mu.Lock()
@@ -881,7 +917,7 @@ func (s *server) endsessionApprove(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Form.Get("sessionid")
 	redirURL := r.Form.Get("redirurl")
 
-	log.Printf("END-SESSION-APPROVE: Ending session: %s", sessionID)
+	s.log().Info("ending session", "session_id", sessionID)
 	s.mu.Lock()
 	delete(s.sessions, sessionID)
 	s.mu.Unlock()
@@ -1048,18 +1084,29 @@ func renderTemplate(w http.ResponseWriter, tpl *template.Template, data any) {
 	}
 }
 
-func logRequest(prefix string, req *http.Request) {
+func logRequest(logger *slog.Logger, endpoint string, req *http.Request) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	body, _ := readBody(req)
-	log.Printf("%s # %s %s", prefix, req.Method, req.URL.Path)
+	logger.Debug("request received", "endpoint", endpoint, "method", req.Method, "path", req.URL.Path)
 	for name, values := range req.Header {
 		for _, value := range values {
-			log.Printf("%s # %s: %s", prefix, name, value)
+			logger.Debug("request header", "endpoint", endpoint, "name", name, "value", value)
 		}
 	}
-	log.Printf("%s #", prefix)
+	logger.Debug("request body start", "endpoint", endpoint)
 	for _, line := range strings.Split(body, "\n") {
-		log.Printf("%s # %s", prefix, line)
+		logger.Debug("request body line", "endpoint", endpoint, "line", line)
 	}
+}
+
+func (s *server) log() *slog.Logger {
+	if s != nil && s.logger != nil {
+		return s.logger
+	}
+	return slog.Default()
 }
 
 func readBody(req *http.Request) (string, error) {
