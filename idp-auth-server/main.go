@@ -868,7 +868,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	sub, _ := claims["sub"].(string)
 	out["sub"] = sub
 	if strings.Contains(scope, "profile") {
-		out["name"] = fmt.Sprintf("Name of user is %s", capitalize(sub))
+		out["name"] = capitalize(sub)
 		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sub))
 	}
 
@@ -1195,7 +1195,7 @@ func defaultIDTokenClaims(subject, scope, clientID, nonce, externalURL string) m
 		claims["nonce"] = nonce
 	}
 	if strings.Contains(scope, "profile") {
-		claims["name"] = fmt.Sprintf("Name of user %s", capitalize(subject))
+		claims["name"] = capitalize(subject)
 		claims["preferred_username"] = capitalize(subject)
 		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(subject))
 	}
