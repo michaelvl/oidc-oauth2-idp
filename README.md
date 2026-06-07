@@ -1,5 +1,8 @@
-Go implementation of
-[github.com/michaelvl/oidc-oauth2-workshop](https://github.com/michaelvl/oidc-oauth2-workshop)
+Go implementations of/inspired-by
+[github.com/michaelvl/oidc-oauth2-workshop](https://github.com/michaelvl/oidc-oauth2-workshop),
+[https://github.com/michaelvl/oidc-bff-apigw-workshop](https://github.com/michaelvl/oidc-bff-apigw-workshop)
+and
+[https://github.com/michaelvl/oidc-oauth2-bff](https://github.com/michaelvl/oidc-oauth2-bff).
 
 This repository contains two standalone components:
 
