@@ -72,17 +72,16 @@ Request flows and path handling:
     backend. Backend is configured with `STATIC_ASSETS_BASE_URL`
   - `/login` - this is forwarded to the application backend and is intended for
     serving a welcome/login page. When user requests login, the application
-    backend should redirect to `/auth/login`
+    backend should redirect to the BFFs `/auth/login` path.
   - `GET /auth/login`, `GET /auth/callback` - OIDC/Oauth2 initiation and
     callback
-  - `GET /auth/me` (returns `401` when not logged in) and returns OIDC claims
-    when logged in. When a `picture` claim exists, its value is rewritten to the
-    BFF-local avatar endpoint (`/auth/avatar`) so the SPA does not need to load
-    IdP-origin image URLs directly.
-  - `GET /auth/avatar` (returns `401` when not logged in, `404` when no picture
-    claim is present) and proxies the user's avatar from the upstream IdP using
-    the current session access token.
   - `/healthz` health endpoint for the BFF.
+- Authenticated BFF paths (returns `401` when not logged in):
+  - `GET /auth/me`returns OIDC claims. When a `picture` claim exists, its value
+    is rewritten to the BFF-local avatar endpoint (`/auth/avatar`) so the SPA
+    does not need to load IdP-origin image URLs directly.
+  - `GET /auth/avatar` proxies the user's avatar from the upstream IdP using the
+    current session access token or `404` if no picture claim exists.
 - Protected SPA navigation: all other non-API routes (including `/`) require a
   valid BFF session; unauthenticated requests are redirected to `GET /login`.
 - API proxy paths: `/api` and `/api/*` are reverse-proxied to `API_BASE_URL`
@@ -95,7 +94,7 @@ Request flows and path handling:
 Unauthenticated user opening `/` and signing in:
 
 ```text
-Browser            BFF (:8080)          Static App (:8082)   IdP (:5001)
+Browser            BFF (:8080)       Static Assets (:8082)   IdP (:5001)
    |                   |                      |                   |
    |-- GET / --------->| (no session)         |                   |
    |<- 303 /login -----|                      |                   |
@@ -161,7 +160,7 @@ Security headers added by the BFF (all responses):
 - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 
-ASCII architecture:
+Architecture:
 
 ```text
 Browser (SPA)
