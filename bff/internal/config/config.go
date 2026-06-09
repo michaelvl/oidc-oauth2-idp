@@ -9,18 +9,21 @@ import (
 )
 
 type BFFConfig struct {
-	OIDCIssuerURL       string
-	OIDCClientID        string
-	OIDCClientSecret    string
-	OIDCRedirectURI     string
-	SessionSecret       string
-	SessionCookieName   string
-	RedisURL            string
-	AccessTokenAUD      string
-	APIBaseURL          string
-	StaticAssetsBaseURL string
-	InsecureCookies     bool
+	OIDCIssuerURL         string
+	OIDCClientID          string
+	OIDCClientSecret      string
+	OIDCRedirectURI       string
+	SessionSecret         string
+	SessionCookieName     string
+	RedisURL              string
+	AccessTokenAUD        string
+	APIBaseURL            string
+	StaticAssetsBaseURL   string
+	ContentSecurityPolicy string
+	InsecureCookies       bool
 }
+
+const DefaultContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'"
 
 type StaticConfig struct {
 	StaticDir string
@@ -51,17 +54,18 @@ func LoadBFF() (BFFConfig, error) {
 	}
 
 	cfg := BFFConfig{
-		OIDCIssuerURL:       strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
-		OIDCClientID:        strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
-		OIDCClientSecret:    strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET")),
-		OIDCRedirectURI:     strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URI")),
-		SessionSecret:       os.Getenv("SESSION_SECRET"),
-		SessionCookieName:   defaultString("SESSION_COOKIE_NAME", "session"),
-		RedisURL:            strings.TrimSpace(os.Getenv("REDIS_URL")),
-		AccessTokenAUD:      strings.TrimSpace(os.Getenv("ACCESS_TOKEN_AUD")),
-		APIBaseURL:          strings.TrimSpace(os.Getenv("API_BASE_URL")),
-		StaticAssetsBaseURL: strings.TrimSpace(os.Getenv("STATIC_ASSETS_BASE_URL")),
-		InsecureCookies:     insecureCookies,
+		OIDCIssuerURL:         strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
+		OIDCClientID:          strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
+		OIDCClientSecret:      strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET")),
+		OIDCRedirectURI:       strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URI")),
+		SessionSecret:         os.Getenv("SESSION_SECRET"),
+		SessionCookieName:     defaultString("SESSION_COOKIE_NAME", "session"),
+		RedisURL:              strings.TrimSpace(os.Getenv("REDIS_URL")),
+		AccessTokenAUD:        strings.TrimSpace(os.Getenv("ACCESS_TOKEN_AUD")),
+		APIBaseURL:            strings.TrimSpace(os.Getenv("API_BASE_URL")),
+		StaticAssetsBaseURL:   strings.TrimSpace(os.Getenv("STATIC_ASSETS_BASE_URL")),
+		ContentSecurityPolicy: defaultString("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy),
+		InsecureCookies:       insecureCookies,
 	}
 
 	if err := cfg.Validate(); err != nil {

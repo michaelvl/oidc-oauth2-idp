@@ -30,6 +30,31 @@ func TestLoadBFF_RequiresAPIAndStaticAssetsBaseURL(t *testing.T) {
 	}
 }
 
+func TestLoadBFF_DefaultContentSecurityPolicy(t *testing.T) {
+	seedRequiredBFFEnv(t)
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.ContentSecurityPolicy != DefaultContentSecurityPolicy {
+		t.Fatalf("expected default CSP %q, got %q", DefaultContentSecurityPolicy, cfg.ContentSecurityPolicy)
+	}
+}
+
+func TestLoadBFF_ContentSecurityPolicyOverride(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("CONTENT_SECURITY_POLICY", "default-src 'none'; script-src 'self'")
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.ContentSecurityPolicy != "default-src 'none'; script-src 'self'" {
+		t.Fatalf("expected CSP override to be applied, got %q", cfg.ContentSecurityPolicy)
+	}
+}
+
 func TestLoadAPI_RequiresOIDCIssuerURL(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://app:app@localhost:5432/app?sslmode=disable")
 	t.Setenv("OIDC_ISSUER_URL", "")

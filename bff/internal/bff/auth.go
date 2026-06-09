@@ -22,14 +22,15 @@ const (
 )
 
 type Dependencies struct {
-	Logger             *slog.Logger
-	Sessions           *session.Manager
-	AuthCodeURL        func(state, codeVerifier string) string
-	ExchangeCode       func(ctx context.Context, code, verifier string) (*oauth2.Token, error)
-	VerifyIDToken      func(ctx context.Context, rawIDToken string) (session.UserClaims, error)
-	EndSessionEndpoint string
-	AvatarHTTPClient   *http.Client
-	InsecureCookies    bool
+	Logger                *slog.Logger
+	Sessions              *session.Manager
+	AuthCodeURL           func(state, codeVerifier string) string
+	ExchangeCode          func(ctx context.Context, code, verifier string) (*oauth2.Token, error)
+	VerifyIDToken         func(ctx context.Context, rawIDToken string) (session.UserClaims, error)
+	EndSessionEndpoint    string
+	AvatarHTTPClient      *http.Client
+	ContentSecurityPolicy string
+	InsecureCookies       bool
 }
 
 type Handler struct {

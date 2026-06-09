@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"oidc-oauth2-idp/bff/internal/config"
 	"oidc-oauth2-idp/bff/internal/session"
 )
 
@@ -94,11 +95,38 @@ func TestSecurityHeaders_PresentOnAllResponses(t *testing.T) {
 	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
 		t.Fatalf("unexpected X-Frame-Options header: %q", got)
 	}
-	if got := rec.Header().Get("Content-Security-Policy"); got != "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'" {
+	if got := rec.Header().Get("Content-Security-Policy"); got != config.DefaultContentSecurityPolicy {
 		t.Fatalf("unexpected CSP header: %q", got)
 	}
 	if got := rec.Header().Get("Referrer-Policy"); got != "strict-origin-when-cross-origin" {
 		t.Fatalf("unexpected Referrer-Policy header: %q", got)
+	}
+}
+
+func TestSecurityHeaders_UsesConfiguredCSPOverride(t *testing.T) {
+	h := New(Dependencies{
+		Logger:                slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
+		Sessions:              session.NewManager(session.NewMemoryStore(), "session", "01234567890123456789012345678901", true),
+		AuthCodeURL:           func(_, _ string) string { return "" },
+		ExchangeCode:          func(context.Context, string, string) (*oauth2.Token, error) { return nil, nil },
+		VerifyIDToken:         func(context.Context, string) (session.UserClaims, error) { return session.UserClaims{}, nil },
+		EndSessionEndpoint:    "https://idp.example/logout",
+		ContentSecurityPolicy: "default-src 'none'; script-src 'self'",
+		InsecureCookies:       true,
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	wrapped := h.SecurityHeaders(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	wrapped.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("Content-Security-Policy"); got != "default-src 'none'; script-src 'self'" {
+		t.Fatalf("unexpected CSP header override: %q", got)
 	}
 }
 

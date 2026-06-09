@@ -157,7 +157,7 @@ Security headers added by the BFF (all responses):
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'`
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 
 Architecture:
@@ -203,4 +203,5 @@ Environment variables:
   (reserved/optional).
 - `INSECURE_COOKIES` (default: `false`): if `true`, disables `Secure` on cookies
   for local HTTP development.
+- `CONTENT_SECURITY_POLICY` (default: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'`): overrides the BFF `Content-Security-Policy` response header value.
 - `PORT` (default: `8080`): BFF listen port.

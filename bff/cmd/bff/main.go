@@ -65,13 +65,14 @@ func run(logger *slog.Logger) error {
 
 	sessionManager := session.NewManager(store, bffCfg.SessionCookieName, bffCfg.SessionSecret, bffCfg.InsecureCookies)
 	authHandler := bff.New(bff.Dependencies{
-		Logger:             logger,
-		Sessions:           sessionManager,
-		AuthCodeURL:        oidcDeps.AuthCodeURL,
-		ExchangeCode:       oidcDeps.ExchangeCode,
-		VerifyIDToken:      oidcDeps.VerifyIDToken,
-		EndSessionEndpoint: oidcDeps.EndSessionEndpoint,
-		InsecureCookies:    bffCfg.InsecureCookies,
+		Logger:                logger,
+		Sessions:              sessionManager,
+		AuthCodeURL:           oidcDeps.AuthCodeURL,
+		ExchangeCode:          oidcDeps.ExchangeCode,
+		VerifyIDToken:         oidcDeps.VerifyIDToken,
+		EndSessionEndpoint:    oidcDeps.EndSessionEndpoint,
+		ContentSecurityPolicy: bffCfg.ContentSecurityPolicy,
+		InsecureCookies:       bffCfg.InsecureCookies,
 	})
 
 	apiProxy, err := bff.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL)
