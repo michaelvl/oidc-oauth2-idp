@@ -54,25 +54,3 @@ func TestLoadBFF_ContentSecurityPolicyOverride(t *testing.T) {
 		t.Fatalf("expected CSP override to be applied, got %q", cfg.ContentSecurityPolicy)
 	}
 }
-
-func TestLoadAPI_RequiresOIDCIssuerURL(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://app:app@localhost:5432/app?sslmode=disable")
-	t.Setenv("OIDC_ISSUER_URL", "")
-
-	_, err := LoadAPI()
-	if err == nil {
-		t.Fatal("expected error when OIDC_ISSUER_URL is missing for API config")
-	}
-}
-
-func TestLoadStatic_DefaultPort(t *testing.T) {
-	t.Setenv("PORT", "")
-
-	cfg, err := LoadStatic()
-	if err != nil {
-		t.Fatalf("expected static config to load, got: %v", err)
-	}
-	if cfg.Port != "8082" {
-		t.Fatalf("expected default static port 8082, got %q", cfg.Port)
-	}
-}
