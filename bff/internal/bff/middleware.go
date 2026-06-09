@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-
-	"oidc-oauth2-idp/bff/internal/config"
 )
 
 // SecurityHeaders sets baseline browser hardening headers for all BFF traffic.
@@ -15,9 +13,6 @@ import (
 func (h *Handler) SecurityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		csp := strings.TrimSpace(h.deps.ContentSecurityPolicy)
-		if csp == "" {
-			csp = config.DefaultContentSecurityPolicy
-		}
 
 		w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

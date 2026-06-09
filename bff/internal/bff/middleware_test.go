@@ -67,13 +67,14 @@ func TestCSRFMiddleware_RejectsInvalidToken(t *testing.T) {
 
 func TestSecurityHeaders_PresentOnAllResponses(t *testing.T) {
 	h := New(Dependencies{
-		Logger:             slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
-		Sessions:           session.NewManager(session.NewMemoryStore(), "session", "01234567890123456789012345678901", true),
-		AuthCodeURL:        func(_, _ string) string { return "" },
-		ExchangeCode:       func(context.Context, string, string) (*oauth2.Token, error) { return nil, nil },
-		VerifyIDToken:      func(context.Context, string) (session.UserClaims, error) { return session.UserClaims{}, nil },
-		EndSessionEndpoint: "https://idp.example/logout",
-		InsecureCookies:    true,
+		Logger:                slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
+		Sessions:              session.NewManager(session.NewMemoryStore(), "session", "01234567890123456789012345678901", true),
+		AuthCodeURL:           func(_, _ string) string { return "" },
+		ExchangeCode:          func(context.Context, string, string) (*oauth2.Token, error) { return nil, nil },
+		VerifyIDToken:         func(context.Context, string) (session.UserClaims, error) { return session.UserClaims{}, nil },
+		EndSessionEndpoint:    "https://idp.example/logout",
+		ContentSecurityPolicy: config.DefaultContentSecurityPolicy,
+		InsecureCookies:       true,
 	})
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
