@@ -157,7 +157,7 @@ Security headers added by the BFF (all responses):
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'`
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; img-src 'self' data: https:`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 
 Architecture:
@@ -199,9 +199,9 @@ Environment variables:
 - `SESSION_COOKIE_NAME` (default: `session`): cookie name for the BFF session.
 - `REDIS_URL` (default: empty): Redis URL for shared session storage; if unset,
   in-memory sessions are used.
-- `ACCESS_TOKEN_AUD` (default: empty): access token audience value
-  (reserved/optional).
 - `INSECURE_COOKIES` (default: `false`): if `true`, disables `Secure` on cookies
   for local HTTP development.
-- `CONTENT_SECURITY_POLICY` (default: `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; connect-src 'self'`): overrides the BFF `Content-Security-Policy` response header value.
+- `CONTENT_SECURITY_POLICY` (default:
+  `default-src 'self'; script-src 'self'; img-src 'self' data: https:`):
+  overrides the BFF `Content-Security-Policy` response header value.
 - `PORT` (default: `8080`): BFF listen port.
