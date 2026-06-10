@@ -22,7 +22,7 @@ type BFFConfig struct {
 	InsecureCookies       bool
 }
 
-const DefaultContentSecurityPolicy = "default-src 'self'; script-src 'self'; img-src 'self' data: https:"
+const DefaultContentSecurityPolicy = "default-src 'self'; script-src 'self'"
 
 type ServerConfig struct {
 	Port string
