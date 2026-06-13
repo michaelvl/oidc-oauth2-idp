@@ -54,3 +54,63 @@ func TestLoadBFF_ContentSecurityPolicyOverride(t *testing.T) {
 		t.Fatalf("expected CSP override to be applied, got %q", cfg.ContentSecurityPolicy)
 	}
 }
+
+func TestLoadBFF_DefaultSessionStorageType(t *testing.T) {
+	seedRequiredBFFEnv(t)
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.SessionStorageType != "memory" {
+		t.Fatalf("expected default session storage type %q, got %q", "memory", cfg.SessionStorageType)
+	}
+}
+
+func TestLoadBFF_SessionStorageTypeRedis_RequiresRedisURL(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("SESSION_STORAGE_TYPE", "redis")
+	// REDIS_URL not set
+
+	_, err := LoadBFF()
+	if err == nil {
+		t.Fatal("expected error when SESSION_STORAGE_TYPE=redis but REDIS_URL is missing")
+	}
+}
+
+func TestLoadBFF_SessionStorageTypeRedis_Valid(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("SESSION_STORAGE_TYPE", "redis")
+	t.Setenv("REDIS_URL", "redis://127.0.0.1:6379")
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.SessionStorageType != "redis" {
+		t.Fatalf("expected session storage type %q, got %q", "redis", cfg.SessionStorageType)
+	}
+}
+
+func TestLoadBFF_SessionStorageTypeCookie_Valid(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("SESSION_STORAGE_TYPE", "cookie")
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.SessionStorageType != "cookie" {
+		t.Fatalf("expected session storage type %q, got %q", "cookie", cfg.SessionStorageType)
+	}
+}
+
+func TestLoadBFF_SessionStorageTypeUnknown_Fails(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("SESSION_STORAGE_TYPE", "invalid")
+
+	_, err := LoadBFF()
+	if err == nil {
+		t.Fatal("expected error for unknown SESSION_STORAGE_TYPE")
+	}
+}

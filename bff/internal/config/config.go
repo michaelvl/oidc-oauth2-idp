@@ -15,6 +15,7 @@ type BFFConfig struct {
 	BFFExternalURL        string
 	SessionSecret         string
 	SessionCookieName     string
+	SessionStorageType    string
 	RedisURL              string
 	APIBaseURL            string
 	StaticAssetsBaseURL   string
@@ -41,6 +42,7 @@ func LoadBFF() (BFFConfig, error) {
 		BFFExternalURL:        strings.TrimSpace(os.Getenv("BFF_EXTERNAL_URL")),
 		SessionSecret:         os.Getenv("SESSION_SECRET"),
 		SessionCookieName:     defaultString("SESSION_COOKIE_NAME", "session"),
+		SessionStorageType:    defaultString("SESSION_STORAGE_TYPE", "memory"),
 		RedisURL:              strings.TrimSpace(os.Getenv("REDIS_URL")),
 		APIBaseURL:            strings.TrimSpace(os.Getenv("API_BASE_URL")),
 		StaticAssetsBaseURL:   strings.TrimSpace(os.Getenv("STATIC_ASSETS_BASE_URL")),
@@ -80,6 +82,16 @@ func (c BFFConfig) Validate() error {
 	}
 	if len(c.SessionSecret) < 32 {
 		errs = append(errs, errors.New("SESSION_SECRET must be at least 32 bytes"))
+	}
+	switch c.SessionStorageType {
+	case "memory", "cookie":
+		// no additional requirements
+	case "redis":
+		if c.RedisURL == "" {
+			errs = append(errs, errors.New("REDIS_URL is required when SESSION_STORAGE_TYPE=redis"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("SESSION_STORAGE_TYPE must be one of: memory, redis, cookie (got %q)", c.SessionStorageType))
 	}
 	if c.APIBaseURL == "" {
 		errs = append(errs, errors.New("API_BASE_URL is required"))

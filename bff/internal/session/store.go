@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"sync"
@@ -11,25 +13,17 @@ import (
 )
 
 type Store interface {
-	Put(ctx context.Context, id string, s Session, ttl time.Duration) error
-	Get(ctx context.Context, id string) (Session, bool, error)
-	Delete(ctx context.Context, id string) error
+	Save(ctx context.Context, s Session, ttl time.Duration) (string, error)
+	Load(ctx context.Context, token string) (Session, bool, error)
+	Delete(ctx context.Context, token string) error
 }
 
-func NewStore(redisURL string) (Store, error) {
-	if redisURL == "" {
-		return NewMemoryStore(), nil
+func randomToken(size int) (string, error) {
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
-
-	opt, err := redis.ParseURL(redisURL)
-	if err != nil {
-		return nil, err
-	}
-
-	return &RedisStore{
-		client: redis.NewClient(opt),
-		prefix: "session:",
-	}, nil
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 type MemoryStore struct {
@@ -46,33 +40,37 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{items: make(map[string]memoryItem)}
 }
 
-func (m *MemoryStore) Put(_ context.Context, id string, s Session, ttl time.Duration) error {
+func (m *MemoryStore) Save(_ context.Context, s Session, ttl time.Duration) (string, error) {
+	id, err := randomToken(32)
+	if err != nil {
+		return "", err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.items[id] = memoryItem{session: s, expires: time.Now().Add(ttl)}
-	return nil
+	return id, nil
 }
 
-func (m *MemoryStore) Get(_ context.Context, id string) (Session, bool, error) {
+func (m *MemoryStore) Load(_ context.Context, token string) (Session, bool, error) {
 	m.mu.RLock()
-	item, ok := m.items[id]
+	item, ok := m.items[token]
 	m.mu.RUnlock()
 	if !ok {
 		return Session{}, false, nil
 	}
 	if time.Now().After(item.expires) {
 		m.mu.Lock()
-		delete(m.items, id)
+		delete(m.items, token)
 		m.mu.Unlock()
 		return Session{}, false, nil
 	}
 	return item.session, true, nil
 }
 
-func (m *MemoryStore) Delete(_ context.Context, id string) error {
+func (m *MemoryStore) Delete(_ context.Context, token string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.items, id)
+	delete(m.items, token)
 	return nil
 }
 
@@ -81,16 +79,34 @@ type RedisStore struct {
 	prefix string
 }
 
-func (r *RedisStore) Put(ctx context.Context, id string, s Session, ttl time.Duration) error {
-	b, err := json.Marshal(s)
+func NewRedisStore(redisURL string) (*RedisStore, error) {
+	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return r.client.Set(ctx, r.prefix+id, string(b), ttl).Err()
+	return &RedisStore{
+		client: redis.NewClient(opt),
+		prefix: "session:",
+	}, nil
 }
 
-func (r *RedisStore) Get(ctx context.Context, id string) (Session, bool, error) {
-	raw, err := r.client.Get(ctx, r.prefix+id).Result()
+func (r *RedisStore) Save(ctx context.Context, s Session, ttl time.Duration) (string, error) {
+	id, err := randomToken(32)
+	if err != nil {
+		return "", err
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return "", err
+	}
+	if err := r.client.Set(ctx, r.prefix+id, string(b), ttl).Err(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (r *RedisStore) Load(ctx context.Context, token string) (Session, bool, error) {
+	raw, err := r.client.Get(ctx, r.prefix+token).Result()
 	if errors.Is(err, redis.Nil) {
 		return Session{}, false, nil
 	}
@@ -106,6 +122,6 @@ func (r *RedisStore) Get(ctx context.Context, id string) (Session, bool, error) 
 	return s, true, nil
 }
 
-func (r *RedisStore) Delete(ctx context.Context, id string) error {
-	return r.client.Del(ctx, r.prefix+id).Err()
+func (r *RedisStore) Delete(ctx context.Context, token string) error {
+	return r.client.Del(ctx, r.prefix+token).Err()
 }

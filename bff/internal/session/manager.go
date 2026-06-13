@@ -2,8 +2,6 @@ package session
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
@@ -24,18 +22,14 @@ func NewManager(store Store, cookieName, secret string, insecureCookie bool) *Ma
 }
 
 func (m *Manager) Create(w http.ResponseWriter, s Session) error {
-	id, err := randomToken(32)
+	token, err := m.store.Save(context.Background(), s, sessionTTL)
 	if err != nil {
-		return err
-	}
-
-	if err := m.store.Put(context.Background(), id, s, sessionTTL); err != nil {
 		return err
 	}
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cookieName,
-		Value:    id,
+		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -55,12 +49,12 @@ func (m *Manager) Get(r *http.Request) (Session, bool, error) {
 		return Session{}, false, err
 	}
 
-	id := strings.TrimSpace(cookie.Value)
-	if id == "" {
+	token := strings.TrimSpace(cookie.Value)
+	if token == "" {
 		return Session{}, false, nil
 	}
 
-	return m.store.Get(r.Context(), id)
+	return m.store.Load(r.Context(), token)
 }
 
 func (m *Manager) Destroy(w http.ResponseWriter, r *http.Request) error {
@@ -83,12 +77,4 @@ func (m *Manager) Destroy(w http.ResponseWriter, r *http.Request) error {
 	})
 
 	return nil
-}
-
-func randomToken(size int) (string, error) {
-	b := make([]byte, size)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
 }

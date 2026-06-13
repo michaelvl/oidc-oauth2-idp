@@ -58,8 +58,8 @@ What it does:
 
 - Runs Authorization Code + PKCE login flow (`/auth/login` -> IdP ->
   `/auth/callback`).
-- Stores tokens server-side in session storage (Redis or in-memory fallback),
-  not in browser JavaScript.
+- Stores tokens in configurable session storage (cookie, Redis, or in-memory),
+  never exposing them to browser JavaScript.
 - Uses an HTTP-only session cookie and CSRF protection for authenticated browser
   traffic.
 - Proxies API requests with injected bearer tokens and proxies static/SPA assets
@@ -198,8 +198,20 @@ Environment variables:
 - `STATIC_ASSETS_BASE_URL` (required): upstream static assets base URL for
   non-API routes.
 - `SESSION_COOKIE_NAME` (default: `session`): cookie name for the BFF session.
-- `REDIS_URL` (default: empty): Redis URL for shared session storage; if unset,
-  in-memory sessions are used.
+- `SESSION_STORAGE_TYPE` (default: `memory`): session storage backend. Accepted
+  values:
+  - `memory` — in-process store; sessions are lost on restart and cannot be
+    shared across replicas.
+  - `redis` — Redis-backed store; requires `REDIS_URL`. Supports multiple
+    replicas and survives restarts.
+  - `cookie` — the full session is AES-256-GCM encrypted (using `SESSION_SECRET`
+    as the key source) and stored directly in the browser cookie. No server-side
+    state is required, making this suitable for stateless deployments, but the
+    cookie size grows with token sizes (~1–2 KB typical). Tokens larger than
+    ~3900 bytes after encryption will return an error; switch to a server-side
+    backend in that case.
+- `REDIS_URL` (default: empty): Redis connection URL (for example
+  `redis://127.0.0.1:6379`). Required when `SESSION_STORAGE_TYPE=redis`.
 - `INSECURE_COOKIES` (default: `false`): if `true`, disables `Secure` on cookies
   for local HTTP development.
 - `CONTENT_SECURITY_POLICY` (default:

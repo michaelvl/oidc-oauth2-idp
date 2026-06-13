@@ -53,7 +53,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 
-	store, err := session.NewStore(bffCfg.RedisURL)
+	store, err := newSessionStore(bffCfg)
 	if err != nil {
 		return fmt.Errorf("initialize session store: %w", err)
 	}
@@ -94,6 +94,17 @@ func run(logger *slog.Logger) error {
 	}
 
 	return nil
+}
+
+func newSessionStore(cfg config.BFFConfig) (session.Store, error) {
+	switch cfg.SessionStorageType {
+	case "redis":
+		return session.NewRedisStore(cfg.RedisURL)
+	case "cookie":
+		return session.NewCookieStore(cfg.SessionSecret), nil
+	default:
+		return session.NewMemoryStore(), nil
+	}
 }
 
 func requireConfig(logger *slog.Logger) (config.BFFConfig, config.ServerConfig, error) {
