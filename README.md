@@ -189,8 +189,9 @@ Environment variables:
 - `OIDC_ISSUER_URL` (required): OIDC issuer URL.
 - `OIDC_CLIENT_ID` (required): OIDC client ID.
 - `OIDC_CLIENT_SECRET` (required): OIDC client secret.
-- `OIDC_REDIRECT_URI` (required): callback URL handled by the BFF (for example
-  `http://localhost:8080/auth/callback`).
+- `BFF_EXTERNAL_URL` (required): external base URL of the BFF (for example
+  `http://localhost:8080`). The BFF derives its OAuth2 callback URL
+  (`/auth/callback`) and post-logout redirect URL (`/login`) from this value.
 - `SESSION_SECRET` (required): session signing/encryption secret, minimum 32
   bytes.
 - `API_BASE_URL` (required): upstream API base URL for `/api/*` proxying.

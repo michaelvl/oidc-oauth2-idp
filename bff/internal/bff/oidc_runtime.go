@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -61,7 +60,7 @@ func BuildOIDCDependencies(cfg config.BFFConfig) (OIDCDependencies, error) {
 		ClientID:     cfg.OIDCClientID,
 		ClientSecret: cfg.OIDCClientSecret,
 		Endpoint:     provider.Endpoint(),
-		RedirectURL:  cfg.OIDCRedirectURI,
+		RedirectURL:  cfg.BFFExternalURL + "/auth/callback",
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access"},
 	}
 
@@ -75,7 +74,7 @@ func BuildOIDCDependencies(cfg config.BFFConfig) (OIDCDependencies, error) {
 	}
 
 	client := OAuthClient{Config: oauthConfig}
-	logoutRedirect := BuildEndSessionURL(metadata.EndSessionEndpoint, postLogoutRedirectURL(cfg.OIDCRedirectURI), "")
+	logoutRedirect := BuildEndSessionURL(metadata.EndSessionEndpoint, cfg.BFFExternalURL+"/login", "")
 
 	return OIDCDependencies{
 		AuthCodeURL:  client.AuthCodeURL,
@@ -102,13 +101,3 @@ func BuildOIDCDependencies(cfg config.BFFConfig) (OIDCDependencies, error) {
 	}, nil
 }
 
-func postLogoutRedirectURL(redirectURI string) string {
-	u, err := url.Parse(redirectURI)
-	if err != nil {
-		return ""
-	}
-	u.Path = "/login"
-	u.RawQuery = ""
-	u.Fragment = ""
-	return u.String()
-}

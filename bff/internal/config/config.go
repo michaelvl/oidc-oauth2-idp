@@ -12,7 +12,7 @@ type BFFConfig struct {
 	OIDCIssuerURL         string
 	OIDCClientID          string
 	OIDCClientSecret      string
-	OIDCRedirectURI       string
+	BFFExternalURL        string
 	SessionSecret         string
 	SessionCookieName     string
 	RedisURL              string
@@ -38,7 +38,7 @@ func LoadBFF() (BFFConfig, error) {
 		OIDCIssuerURL:         strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
 		OIDCClientID:          strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
 		OIDCClientSecret:      strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET")),
-		OIDCRedirectURI:       strings.TrimSpace(os.Getenv("OIDC_REDIRECT_URI")),
+		BFFExternalURL:        strings.TrimSpace(os.Getenv("BFF_EXTERNAL_URL")),
 		SessionSecret:         os.Getenv("SESSION_SECRET"),
 		SessionCookieName:     defaultString("SESSION_COOKIE_NAME", "session"),
 		RedisURL:              strings.TrimSpace(os.Getenv("REDIS_URL")),
@@ -75,8 +75,8 @@ func (c BFFConfig) Validate() error {
 	if c.OIDCClientSecret == "" {
 		errs = append(errs, errors.New("OIDC_CLIENT_SECRET is required"))
 	}
-	if c.OIDCRedirectURI == "" {
-		errs = append(errs, errors.New("OIDC_REDIRECT_URI is required"))
+	if c.BFFExternalURL == "" {
+		errs = append(errs, errors.New("BFF_EXTERNAL_URL is required"))
 	}
 	if len(c.SessionSecret) < 32 {
 		errs = append(errs, errors.New("SESSION_SECRET must be at least 32 bytes"))

@@ -7,7 +7,7 @@ func seedRequiredBFFEnv(t *testing.T) {
 	t.Setenv("OIDC_ISSUER_URL", "http://idp:5001")
 	t.Setenv("OIDC_CLIENT_ID", "client")
 	t.Setenv("OIDC_CLIENT_SECRET", "secret")
-	t.Setenv("OIDC_REDIRECT_URI", "http://localhost:8080/auth/callback")
+	t.Setenv("BFF_EXTERNAL_URL", "http://localhost:8080")
 	t.Setenv("SESSION_SECRET", "01234567890123456789012345678901")
 	t.Setenv("API_BASE_URL", "http://localhost:8081")
 	t.Setenv("STATIC_ASSETS_BASE_URL", "http://localhost:8082")
