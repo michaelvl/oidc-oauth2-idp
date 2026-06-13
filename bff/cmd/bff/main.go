@@ -70,6 +70,7 @@ func run(logger *slog.Logger) error {
 		AuthCodeURL:           oidcDeps.AuthCodeURL,
 		ExchangeCode:          oidcDeps.ExchangeCode,
 		VerifyIDToken:         oidcDeps.VerifyIDToken,
+		RefreshTokens:         oidcDeps.RefreshTokens,
 		EndSessionEndpoint:    oidcDeps.EndSessionEndpoint,
 		ContentSecurityPolicy: bffCfg.ContentSecurityPolicy,
 		InsecureCookies:       bffCfg.InsecureCookies,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 type UserClaims struct {
@@ -15,10 +16,11 @@ type UserClaims struct {
 }
 
 type Session struct {
-	AccessToken  string    `json:"accessToken"`
-	RefreshToken string    `json:"refreshToken"`
-	IDToken      string    `json:"idToken"`
-	CSRFToken    string    `json:"csrfToken"`
+	AccessToken       string    `json:"accessToken"`
+	RefreshToken      string    `json:"refreshToken"`
+	IDToken           string    `json:"idToken"`
+	CSRFToken         string    `json:"csrfToken"`
+	AccessTokenExpiry time.Time `json:"accessTokenExpiry,omitempty"`
 }
 
 func ParseIDTokenClaims(rawIDToken string) (UserClaims, error) {

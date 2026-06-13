@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"oidc-oauth2-idp/bff/internal/session"
 )
@@ -51,6 +52,28 @@ func (h *Handler) AuthGuard(next http.Handler) http.Handler {
 	})
 }
 
+const tokenRefreshThreshold = 60 * time.Second
+
+func (h *Handler) refreshAccessToken(w http.ResponseWriter, r *http.Request, current session.Session) (session.Session, error) {
+	newToken, err := h.deps.RefreshTokens(r.Context(), current.RefreshToken)
+	if err != nil {
+		return session.Session{}, err
+	}
+	updated := current
+	updated.AccessToken = newToken.AccessToken
+	updated.AccessTokenExpiry = newToken.Expiry
+	if newToken.RefreshToken != "" {
+		updated.RefreshToken = newToken.RefreshToken
+	}
+	if rawID, ok := newToken.Extra("id_token").(string); ok && rawID != "" {
+		updated.IDToken = rawID
+	}
+	if err := h.deps.Sessions.Rotate(w, r, updated); err != nil {
+		return session.Session{}, err
+	}
+	return updated, nil
+}
+
 // TokenForwarder injects a bearer token for internal API proxy requests.
 // It is intended for /api/* traffic where the browser omits Authorization
 // and the BFF should forward the logged-in session access token downstream.
@@ -75,6 +98,24 @@ func (h *Handler) TokenForwarder(next http.Handler) http.Handler {
 		if !ok || strings.TrimSpace(current.AccessToken) == "" {
 			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
+		}
+
+		if h.deps.RefreshTokens != nil && current.RefreshToken != "" && !current.AccessTokenExpiry.IsZero() {
+			tokenExpired := time.Now().After(current.AccessTokenExpiry)
+			tokenNearExpiry := time.Now().Add(tokenRefreshThreshold).After(current.AccessTokenExpiry)
+			if tokenExpired || tokenNearExpiry {
+				refreshed, err := h.refreshAccessToken(w, r, current)
+				if err != nil {
+					if tokenExpired {
+						_ = h.deps.Sessions.Destroy(w, r)
+						writeJSONError(w, http.StatusUnauthorized, "session expired")
+						return
+					}
+					h.deps.Logger.Warn("token_refresh_failed", "error", err.Error())
+				} else {
+					current = refreshed
+				}
+			}
 		}
 
 		forwarded := r.Clone(r.Context())

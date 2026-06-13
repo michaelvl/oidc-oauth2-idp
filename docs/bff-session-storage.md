@@ -9,12 +9,36 @@ running over plain HTTP in local development.
 
 The session holds:
 
-| Field          | Description           |
-| -------------- | --------------------- |
-| `AccessToken`  | OAuth2 access token   |
-| `RefreshToken` | OAuth2 refresh token  |
-| `IDToken`      | Raw JWT ID token      |
-| `CSRFToken`    | CSRF protection token |
+| Field               | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| `AccessToken`       | OAuth2 access token                               |
+| `RefreshToken`      | OAuth2 refresh token                              |
+| `IDToken`           | Raw JWT ID token                                  |
+| `CSRFToken`         | CSRF protection token                             |
+| `AccessTokenExpiry` | When the access token expires (from `expires_in`) |
+
+## Token Refresh
+
+On every proxied API request (`/api/*`), the BFF checks whether the access token
+is expired or within **60 seconds** of expiry. If so, and a refresh token is
+present, the BFF calls the IdP's token endpoint with `grant_type=refresh_token`
+before forwarding the request.
+
+| Condition                                                                     | Result                                                                                            |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Token valid, not near expiry                                                  | Request forwarded unchanged                                                                       |
+| Token within 60s of expiry, refresh succeeds                                  | New tokens stored, session cookie re-issued (rolling 24h TTL), request forwarded with fresh token |
+| Token within 60s of expiry, refresh fails                                     | Warning logged; request forwarded with existing token (still valid)                               |
+| Token already expired, refresh succeeds                                       | New tokens stored, session cookie re-issued, request forwarded with fresh token                   |
+| Token already expired, refresh fails                                          | Session destroyed, `401` returned — browser must re-login                                         |
+| `AccessTokenExpiry` is zero (sessions predating this field, dev memory store) | No refresh attempted                                                                              |
+
+If the IdP returns a new refresh token (rotation), it replaces the stored one.
+If the IdP returns a new ID token in the refresh response, it also replaces the
+stored one.
+
+The session cookie TTL resets to 24 hours on every successful refresh, giving a
+rolling session lifetime as long as the user is active.
 
 ---
 

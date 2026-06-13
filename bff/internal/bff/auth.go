@@ -27,6 +27,7 @@ type Dependencies struct {
 	AuthCodeURL           func(state, codeVerifier string) string
 	ExchangeCode          func(ctx context.Context, code, verifier string) (*oauth2.Token, error)
 	VerifyIDToken         func(ctx context.Context, rawIDToken string) (session.UserClaims, error)
+	RefreshTokens         func(ctx context.Context, refreshToken string) (*oauth2.Token, error)
 	EndSessionEndpoint    string
 	AvatarHTTPClient      *http.Client
 	ContentSecurityPolicy string
@@ -104,10 +105,11 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 	csrf := oauth2.GenerateVerifier()
 
 	if err := h.deps.Sessions.Create(w, session.Session{
-		AccessToken:  tokenSet.AccessToken,
-		RefreshToken: tokenSet.RefreshToken,
-		IDToken:      rawIDToken,
-		CSRFToken:    csrf,
+		AccessToken:       tokenSet.AccessToken,
+		RefreshToken:      tokenSet.RefreshToken,
+		IDToken:           rawIDToken,
+		CSRFToken:         csrf,
+		AccessTokenExpiry: tokenSet.Expiry,
 	}); err != nil {
 		h.writeError(w, http.StatusInternalServerError, "internal server error")
 		return

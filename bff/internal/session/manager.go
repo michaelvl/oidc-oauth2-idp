@@ -57,6 +57,13 @@ func (m *Manager) Get(r *http.Request) (Session, bool, error) {
 	return m.store.Load(r.Context(), token)
 }
 
+func (m *Manager) Rotate(w http.ResponseWriter, r *http.Request, s Session) error {
+	if c, err := r.Cookie(m.cookieName); err == nil && strings.TrimSpace(c.Value) != "" {
+		_ = m.store.Delete(r.Context(), c.Value)
+	}
+	return m.Create(w, s)
+}
+
 func (m *Manager) Destroy(w http.ResponseWriter, r *http.Request) error {
 	cookie, err := r.Cookie(m.cookieName)
 	if err == nil && strings.TrimSpace(cookie.Value) != "" {

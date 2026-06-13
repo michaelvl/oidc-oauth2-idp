@@ -24,3 +24,11 @@ func (c OAuthClient) ExchangeCode(ctx context.Context, code, verifier string) (*
 	}
 	return c.Config.Exchange(ctx, code, oauth2.VerifierOption(verifier))
 }
+
+func (c OAuthClient) RefreshTokens(ctx context.Context, refreshToken string) (*oauth2.Token, error) {
+	if c.Config == nil {
+		return nil, errors.New("oauth config is missing")
+	}
+	ts := c.Config.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken})
+	return ts.Token()
+}

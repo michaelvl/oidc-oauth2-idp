@@ -17,6 +17,7 @@ type OIDCDependencies struct {
 	AuthCodeURL        func(state, codeVerifier string) string
 	ExchangeCode       func(ctx context.Context, code, verifier string) (*oauth2.Token, error)
 	VerifyIDToken      func(ctx context.Context, rawIDToken string) (session.UserClaims, error)
+	RefreshTokens      func(ctx context.Context, refreshToken string) (*oauth2.Token, error)
 	EndSessionEndpoint string
 }
 
@@ -77,8 +78,9 @@ func BuildOIDCDependencies(cfg config.BFFConfig) (OIDCDependencies, error) {
 	logoutRedirect := BuildEndSessionURL(metadata.EndSessionEndpoint, cfg.BFFExternalURL+"/login", "")
 
 	return OIDCDependencies{
-		AuthCodeURL:  client.AuthCodeURL,
-		ExchangeCode: client.ExchangeCode,
+		AuthCodeURL:   client.AuthCodeURL,
+		ExchangeCode:  client.ExchangeCode,
+		RefreshTokens: client.RefreshTokens,
 		VerifyIDToken: func(ctx context.Context, rawIDToken string) (session.UserClaims, error) {
 			idToken, err := verifier.Verify(ctx, rawIDToken)
 			if err != nil {
