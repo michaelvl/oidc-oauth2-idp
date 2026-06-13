@@ -99,7 +99,7 @@ func run(logger *slog.Logger) error {
 func newSessionStore(cfg config.BFFConfig) (session.Store, error) {
 	switch cfg.SessionStorageType {
 	case "redis":
-		return session.NewRedisStore(cfg.RedisURL)
+		return session.NewRedisStore(cfg.RedisURL, cfg.SessionCookieName)
 	case "cookie":
 		return session.NewCookieStore(cfg.SessionSecret), nil
 	default:

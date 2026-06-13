@@ -13,9 +13,7 @@ func testSession() Session {
 		AccessToken:  "access-token",
 		RefreshToken: "refresh-token",
 		IDToken:      "id-token",
-		ExpiresAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		CSRFToken:    "csrf-token",
-		User:         UserClaims{Sub: "user-1", Name: "Alice", Email: "alice@example.com"},
 	}
 }
 
@@ -37,9 +35,6 @@ func TestCookieStore_RoundTrip(t *testing.T) {
 	}
 	if !ok {
 		t.Fatal("expected session to be found")
-	}
-	if got.User.Sub != s.User.Sub {
-		t.Fatalf("subject mismatch: got %q, want %q", got.User.Sub, s.User.Sub)
 	}
 	if got.AccessToken != s.AccessToken {
 		t.Fatalf("access token mismatch: got %q, want %q", got.AccessToken, s.AccessToken)

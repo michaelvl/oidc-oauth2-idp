@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/oauth2"
 
@@ -34,9 +33,7 @@ func TestCSRFMiddleware_RejectsInvalidToken(t *testing.T) {
 	seed := httptest.NewRecorder()
 	if err := manager.Create(seed, session.Session{
 		AccessToken: "token",
-		ExpiresAt:   time.Now().Add(time.Hour),
 		CSRFToken:   "expected-csrf",
-		User:        session.UserClaims{Sub: "user-1"},
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
@@ -148,9 +145,7 @@ func TestTokenForwarder_InjectsAuthorizationFromSession(t *testing.T) {
 	seed := httptest.NewRecorder()
 	if err := manager.Create(seed, session.Session{
 		AccessToken: "access-token-1",
-		ExpiresAt:   time.Now().Add(time.Hour),
 		CSRFToken:   "csrf-1",
-		User:        session.UserClaims{Sub: "user-1"},
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}

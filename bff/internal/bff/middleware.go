@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"oidc-oauth2-idp/bff/internal/session"
 )
 
 // SecurityHeaders sets baseline browser hardening headers for all BFF traffic.
@@ -110,7 +112,11 @@ func (h *Handler) CSRFMiddleware(next http.Handler) http.Handler {
 
 		headerToken := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
 		if headerToken == "" || headerToken != current.CSRFToken {
-			h.deps.Logger.Info("security_event", "event", "csrf_validation_failed", "sub", current.User.Sub, "path", r.URL.Path, "method", r.Method)
+			sub := ""
+			if c, err := session.ParseIDTokenClaims(current.IDToken); err == nil {
+				sub = c.Sub
+			}
+			h.deps.Logger.Info("security_event", "event", "csrf_validation_failed", "sub", sub, "path", r.URL.Path, "method", r.Method)
 			writeJSONError(w, http.StatusForbidden, "forbidden")
 			return
 		}

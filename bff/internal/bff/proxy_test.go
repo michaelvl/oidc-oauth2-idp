@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"oidc-oauth2-idp/bff/internal/session"
 )
@@ -150,9 +149,7 @@ func seededSessionManager(t *testing.T, accessToken string) (*session.Manager, *
 	seed := httptest.NewRecorder()
 	if err := manager.Create(seed, session.Session{
 		AccessToken: accessToken,
-		ExpiresAt:   time.Now().Add(time.Hour),
 		CSRFToken:   "csrf",
-		User:        session.UserClaims{Sub: "sub-1"},
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}

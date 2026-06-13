@@ -107,9 +107,7 @@ func (h *Handler) Callback(w http.ResponseWriter, r *http.Request) {
 		AccessToken:  tokenSet.AccessToken,
 		RefreshToken: tokenSet.RefreshToken,
 		IDToken:      rawIDToken,
-		ExpiresAt:    tokenSet.Expiry,
 		CSRFToken:    csrf,
-		User:         claims,
 	}); err != nil {
 		h.writeError(w, http.StatusInternalServerError, "internal server error")
 		return
@@ -132,7 +130,11 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: "", Path: "/", HttpOnly: false, SameSite: http.SameSiteLaxMode, Secure: !h.deps.InsecureCookies, Expires: time.Unix(0, 0), MaxAge: -1})
 
 	if ok {
-		h.deps.Logger.Info("security_event", "event", "logout", "sub", current.User.Sub, "remote_ip", r.RemoteAddr)
+		sub := ""
+		if c, err := session.ParseIDTokenClaims(current.IDToken); err == nil {
+			sub = c.Sub
+		}
+		h.deps.Logger.Info("security_event", "event", "logout", "sub", sub, "remote_ip", r.RemoteAddr)
 	}
 
 	logoutURL := h.deps.EndSessionEndpoint
@@ -164,14 +166,18 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user := current.User
-	if user.Picture != "" {
-		user.Picture = "/auth/avatar"
+	claims, err := session.ParseIDTokenClaims(current.IDToken)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if claims.Picture != "" {
+		claims.Picture = "/auth/avatar"
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(user)
+	_ = json.NewEncoder(w).Encode(claims)
 }
 
 func (h *Handler) Avatar(w http.ResponseWriter, r *http.Request) {
@@ -184,12 +190,13 @@ func (h *Handler) Avatar(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	if current.User.Picture == "" {
+	avatarClaims, err := session.ParseIDTokenClaims(current.IDToken)
+	if err != nil || avatarClaims.Picture == "" {
 		h.writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 
-	pictureURL, err := url.Parse(current.User.Picture)
+	pictureURL, err := url.Parse(avatarClaims.Picture)
 	if err != nil || pictureURL.Scheme == "" || pictureURL.Host == "" || (pictureURL.Scheme != "http" && pictureURL.Scheme != "https") {
 		h.writeError(w, http.StatusBadGateway, "bad gateway")
 		return

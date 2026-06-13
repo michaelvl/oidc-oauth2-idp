@@ -2,10 +2,15 @@ package session
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +29,38 @@ func randomToken(size int) (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func encryptAESGCM(key, plaintext []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+}
+
+func decryptAESGCM(key, data []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	return gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
 }
 
 type MemoryStore struct {
@@ -79,14 +116,14 @@ type RedisStore struct {
 	prefix string
 }
 
-func NewRedisStore(redisURL string) (*RedisStore, error) {
+func NewRedisStore(redisURL, cookieName string) (*RedisStore, error) {
 	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
 		return nil, err
 	}
 	return &RedisStore{
 		client: redis.NewClient(opt),
-		prefix: "session:",
+		prefix: cookieName + "-",
 	}, nil
 }
 
@@ -95,18 +132,42 @@ func (r *RedisStore) Save(ctx context.Context, s Session, ttl time.Duration) (st
 	if err != nil {
 		return "", err
 	}
-	b, err := json.Marshal(s)
+
+	secretBytes := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, secretBytes); err != nil {
+		return "", err
+	}
+
+	plaintext, err := json.Marshal(s)
 	if err != nil {
 		return "", err
 	}
-	if err := r.client.Set(ctx, r.prefix+id, string(b), ttl).Err(); err != nil {
+
+	ciphertext, err := encryptAESGCM(secretBytes, plaintext)
+	if err != nil {
 		return "", err
 	}
-	return id, nil
+
+	if err := r.client.Set(ctx, r.prefix+id, ciphertext, ttl).Err(); err != nil {
+		return "", err
+	}
+
+	secret := base64.RawURLEncoding.EncodeToString(secretBytes)
+	return id + "." + secret, nil
 }
 
 func (r *RedisStore) Load(ctx context.Context, token string) (Session, bool, error) {
-	raw, err := r.client.Get(ctx, r.prefix+token).Result()
+	id, secretB64, ok := strings.Cut(token, ".")
+	if !ok {
+		return Session{}, false, nil
+	}
+
+	secretBytes, err := base64.RawURLEncoding.DecodeString(secretB64)
+	if err != nil {
+		return Session{}, false, nil
+	}
+
+	ciphertext, err := r.client.Get(ctx, r.prefix+id).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return Session{}, false, nil
 	}
@@ -114,8 +175,13 @@ func (r *RedisStore) Load(ctx context.Context, token string) (Session, bool, err
 		return Session{}, false, err
 	}
 
+	plaintext, err := decryptAESGCM(secretBytes, ciphertext)
+	if err != nil {
+		return Session{}, false, nil
+	}
+
 	var s Session
-	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+	if err := json.Unmarshal(plaintext, &s); err != nil {
 		return Session{}, false, err
 	}
 
@@ -123,5 +189,6 @@ func (r *RedisStore) Load(ctx context.Context, token string) (Session, bool, err
 }
 
 func (r *RedisStore) Delete(ctx context.Context, token string) error {
-	return r.client.Del(ctx, r.prefix+token).Err()
+	id, _, _ := strings.Cut(token, ".")
+	return r.client.Del(ctx, r.prefix+id).Err()
 }

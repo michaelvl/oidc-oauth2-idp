@@ -2,6 +2,7 @@ package bff
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -15,6 +16,16 @@ import (
 
 	"oidc-oauth2-idp/bff/internal/session"
 )
+
+func testIDToken(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	payload, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatalf("marshal id token claims: %v", err)
+	}
+	return header + "." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
 
 func TestAuthCallback_SetsSessionAndCSRFCookie(t *testing.T) {
 	store := session.NewMemoryStore()
@@ -175,14 +186,8 @@ func TestAuthMe_ReturnsClaimsWhenAuthenticated(t *testing.T) {
 	seed := httptest.NewRecorder()
 	if err := manager.Create(seed, session.Session{
 		AccessToken: "token",
-		ExpiresAt:   time.Now().Add(time.Hour),
+		IDToken:     testIDToken(t, map[string]any{"sub": "abc", "name": "Alice", "email": "alice@example.com", "picture": "https://example.com/a.png"}),
 		CSRFToken:   "csrf",
-		User: session.UserClaims{
-			Sub:     "abc",
-			Name:    "Alice",
-			Email:   "alice@example.com",
-			Picture: "https://example.com/a.png",
-		},
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
@@ -249,7 +254,7 @@ func TestAuthLogout_DestroysSessionAndRedirects(t *testing.T) {
 	})
 
 	seed := httptest.NewRecorder()
-	if err := manager.Create(seed, session.Session{AccessToken: "token", IDToken: "raw.id.token", ExpiresAt: time.Now().Add(time.Hour), CSRFToken: "csrf", User: session.UserClaims{Sub: "sub-1"}}); err != nil {
+	if err := manager.Create(seed, session.Session{AccessToken: "token", IDToken: "raw.id.token", CSRFToken: "csrf"}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 
@@ -305,12 +310,8 @@ func TestAuthAvatar_ProxiesWithAccessToken(t *testing.T) {
 	seed := httptest.NewRecorder()
 	if err := manager.Create(seed, session.Session{
 		AccessToken: "access-token",
-		ExpiresAt:   time.Now().Add(time.Hour),
+		IDToken:     testIDToken(t, map[string]any{"sub": "abc", "picture": avatarUpstream.URL + "/avatar.svg"}),
 		CSRFToken:   "csrf",
-		User: session.UserClaims{
-			Sub:     "abc",
-			Picture: avatarUpstream.URL + "/avatar.svg",
-		},
 	}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
@@ -352,7 +353,7 @@ func TestAuthAvatar_Returns404WhenNoPicture(t *testing.T) {
 	})
 
 	seed := httptest.NewRecorder()
-	if err := manager.Create(seed, session.Session{AccessToken: "token", ExpiresAt: time.Now().Add(time.Hour), CSRFToken: "csrf", User: session.UserClaims{Sub: "sub-1"}}); err != nil {
+	if err := manager.Create(seed, session.Session{AccessToken: "token", IDToken: testIDToken(t, map[string]any{"sub": "sub-1"}), CSRFToken: "csrf"}); err != nil {
 		t.Fatalf("seed session: %v", err)
 	}
 

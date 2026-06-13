@@ -8,7 +8,7 @@ import (
 
 func TestMemoryStore_RoundTrip(t *testing.T) {
 	store := NewMemoryStore()
-	s := Session{AccessToken: "a", ExpiresAt: time.Now().Add(time.Hour), CSRFToken: "csrf", User: UserClaims{Sub: "u"}}
+	s := Session{AccessToken: "a", CSRFToken: "csrf"}
 
 	token, err := store.Save(context.Background(), s, time.Hour)
 	if err != nil {
@@ -25,8 +25,8 @@ func TestMemoryStore_RoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatal("expected session to exist")
 	}
-	if got.User.Sub != "u" {
-		t.Fatalf("unexpected subject: %s", got.User.Sub)
+	if got.AccessToken != "a" {
+		t.Fatalf("unexpected access token: %s", got.AccessToken)
 	}
 
 	if err := store.Delete(context.Background(), token); err != nil {
@@ -42,7 +42,7 @@ func TestMemoryStore_RoundTrip(t *testing.T) {
 }
 
 func TestNewRedisStore_ParsesURL(t *testing.T) {
-	store, err := NewRedisStore("redis://127.0.0.1:6379")
+	store, err := NewRedisStore("redis://127.0.0.1:6379", "session")
 	if err != nil {
 		t.Fatalf("new redis store: %v", err)
 	}
