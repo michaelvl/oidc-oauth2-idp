@@ -34,7 +34,7 @@ func BuildMiddlewareStack(auth *Handler, recovery func(http.Handler) http.Handle
 			h = recovery(h)
 		}
 		if auth != nil {
-			h = auth.SecurityHeaders(auth.AuthGuard(auth.CSRFMiddleware(h)))
+			h = auth.SecurityHeaders(auth.AuthGuard(auth.CSRFMiddleware(auth.TokenForwarder(h))))
 		}
 		return h
 	}

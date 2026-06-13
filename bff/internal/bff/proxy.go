@@ -57,19 +57,24 @@ func NewAPIProxy(logger *slog.Logger, sessions *session.Manager, apiBaseURL stri
 }
 
 func (p *APIProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	current, ok, err := p.sessions.Get(r)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	if !ok || strings.TrimSpace(current.AccessToken) == "" {
-		writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
-
 	forwarded := r.Clone(r.Context())
 	forwarded.Header = r.Header.Clone()
-	forwarded.Header.Set("Authorization", "Bearer "+current.AccessToken)
+
+	if !strings.HasPrefix(strings.TrimSpace(forwarded.Header.Get("Authorization")), "Bearer ") {
+		// TokenForwarder middleware did not set a token (e.g. in tests or direct calls);
+		// fall back to reading from the session.
+		current, ok, err := p.sessions.Get(r)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "internal server error")
+			return
+		}
+		if !ok || strings.TrimSpace(current.AccessToken) == "" {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		forwarded.Header.Set("Authorization", "Bearer "+current.AccessToken)
+	}
+
 	forwarded.Header.Set("X-Forwarded-Host", r.Host)
 	if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
 		forwarded.Header.Set("X-Forwarded-For", host)
