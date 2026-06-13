@@ -133,14 +133,3 @@ secret can decrypt any session cookie. The secret must be kept confidential and
 rotated if compromised. Rotating the secret immediately invalidates all existing
 sessions.
 
----
-
-## Configuration reference
-
-| Variable               | Required         | Default   | Description                                                                |
-| ---------------------- | ---------------- | --------- | -------------------------------------------------------------------------- |
-| `SESSION_SECRET`       | Yes              | —         | Min 32 bytes. Signing/encryption key for cookie and cookie-store backends. |
-| `SESSION_COOKIE_NAME`  | No               | `session` | Name of the session cookie.                                                |
-| `SESSION_STORAGE_TYPE` | No               | `memory`  | One of `memory`, `redis`, `cookie`.                                        |
-| `REDIS_URL`            | Only for `redis` | —         | Redis connection URL.                                                      |
-| `INSECURE_COOKIES`     | No               | `false`   | Disables the `Secure` flag; use only for HTTP-only local development.      |

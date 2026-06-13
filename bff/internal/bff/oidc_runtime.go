@@ -62,7 +62,7 @@ func BuildOIDCDependencies(cfg config.BFFConfig) (OIDCDependencies, error) {
 		ClientSecret: cfg.OIDCClientSecret,
 		Endpoint:     provider.Endpoint(),
 		RedirectURL:  cfg.BFFExternalURL + "/auth/callback",
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access"},
+		Scopes:       cfg.OIDCScopes,
 	}
 
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})

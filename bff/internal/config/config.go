@@ -12,6 +12,7 @@ type BFFConfig struct {
 	OIDCIssuerURL         string
 	OIDCClientID          string
 	OIDCClientSecret      string
+	OIDCScopes            []string
 	BFFExternalURL        string
 	SessionSecret         string
 	SessionCookieName     string
@@ -39,6 +40,7 @@ func LoadBFF() (BFFConfig, error) {
 		OIDCIssuerURL:         strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
 		OIDCClientID:          strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
 		OIDCClientSecret:      strings.TrimSpace(os.Getenv("OIDC_CLIENT_SECRET")),
+		OIDCScopes:            parseScopes(os.Getenv("OIDC_SCOPES")),
 		BFFExternalURL:        strings.TrimSpace(os.Getenv("BFF_EXTERNAL_URL")),
 		SessionSecret:         os.Getenv("SESSION_SECRET"),
 		SessionCookieName:     defaultString("SESSION_COOKIE_NAME", "session"),
@@ -121,6 +123,20 @@ func defaultString(key, value string) string {
 		return value
 	}
 	return raw
+}
+
+func parseScopes(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{"openid", "profile", "email", "offline_access"}
+	}
+	var scopes []string
+	for _, s := range strings.Fields(raw) {
+		if s != "" {
+			scopes = append(scopes, s)
+		}
+	}
+	return scopes
 }
 
 func parseBoolDefault(key string, fallback bool) (bool, error) {
