@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"oidc-oauth2-idp/bff/internal/bff"
 	"oidc-oauth2-idp/bff/internal/config"
+	"oidc-oauth2-idp/bff/internal/handler"
 	"oidc-oauth2-idp/bff/internal/server"
 	"oidc-oauth2-idp/bff/internal/session"
 )
@@ -58,13 +58,13 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("initialize session store: %w", err)
 	}
 
-	oidcDeps, err := bff.BuildOIDCDependenciesWithRetry(logger, bffCfg)
+	oidcDeps, err := handler.BuildOIDCDependenciesWithRetry(logger, bffCfg)
 	if err != nil {
 		return fmt.Errorf("initialize oidc: %w", err)
 	}
 
 	sessionManager := session.NewManager(store, bffCfg.SessionCookieName, bffCfg.SessionSecret, bffCfg.InsecureCookies)
-	authHandler := bff.New(bff.Dependencies{
+	authHandler := handler.New(handler.Dependencies{
 		Logger:                logger,
 		Sessions:              sessionManager,
 		AuthCodeURL:           oidcDeps.AuthCodeURL,
@@ -76,21 +76,21 @@ func run(logger *slog.Logger) error {
 		InsecureCookies:       bffCfg.InsecureCookies,
 	})
 
-	apiProxy, err := bff.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL)
+	apiProxy, err := handler.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL)
 	if err != nil {
 		return fmt.Errorf("initialize api proxy: %w", err)
 	}
 
-	staticAssetsProxy, err := bff.NewStaticAssetsProxy(logger, bffCfg.StaticAssetsBaseURL)
+	staticAssetsProxy, err := handler.NewStaticAssetsProxy(logger, bffCfg.StaticAssetsBaseURL)
 	if err != nil {
 		return fmt.Errorf("initialize static assets proxy: %w", err)
 	}
 
-	handler := server.NewBFF(logger, staticAssetsProxy, authHandler, apiProxy)
+	h := server.NewBFF(logger, staticAssetsProxy, authHandler, apiProxy)
 	addr := ":" + serverCfg.Port
 
 	logger.Info("starting bff", "addr", addr)
-	if err := http.ListenAndServe(addr, handler); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := http.ListenAndServe(addr, h); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listen and serve: %w", err)
 	}
 

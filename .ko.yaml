@@ -8,4 +8,4 @@ builds:
     main: ./idp-auth-server
   - id: bff
     dir: .
-    main: ./bff/cmd/bff
+    main: ./bff/cmd

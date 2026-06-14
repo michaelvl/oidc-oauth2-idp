@@ -1,4 +1,4 @@
-package bff
+package handler
 
 import (
 	"context"
@@ -102,4 +102,3 @@ func BuildOIDCDependencies(cfg config.BFFConfig) (OIDCDependencies, error) {
 		EndSessionEndpoint: logoutRedirect,
 	}, nil
 }
-
