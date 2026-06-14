@@ -54,6 +54,25 @@ services. It runs independently from the IdP and can be configured against any
 compatible OIDC issuer. The browser talks only to the BFF origin; the BFF
 handles login/session concerns and forwards requests to upstream services.
 
+TL;DR path routing:
+
+```text
+                      ┌─ /auth/login    ─┐
+                      ├─ /auth/callback ─┤
+Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [internal OIDC/Oauth2]
+                 │    ├─ /auth/me       ─┤
+                 │    ├─ /auth/avatar   ─┤
+                 │    └─ /healthz       ─┘
+                 │
+                 ├──► /api/* ──────────────────────────► API_BASE_URL/api/*
+                 │
+                 ├──► /assets/*    ┐
+                 │    /login       ├─ (no session) ────► STATIC_ASSETS_BASE_URL/*
+                 │    /favicon.ico ┘
+                 │
+                 └──► /* (session required) ───────────► STATIC_ASSETS_BASE_URL/*
+```
+
 What it does:
 
 - Runs Authorization Code + PKCE login flow (`/auth/login` -> IdP ->
@@ -189,8 +208,9 @@ Environment variables:
 - `OIDC_ISSUER_URL` (required): OIDC issuer URL.
 - `OIDC_CLIENT_ID` (required): OIDC client ID.
 - `OIDC_CLIENT_SECRET` (required): OIDC client secret.
-- `OIDC_SCOPES` (default: `openid profile email offline_access`): space-separated
-  list of OAuth2 scopes to request. Omit `offline_access` to disable token refresh.
+- `OIDC_SCOPES` (default: `openid profile email offline_access`):
+  space-separated list of OAuth2 scopes to request. Omit `offline_access` to
+  disable token refresh.
 - `BFF_EXTERNAL_URL` (required): external base URL of the BFF (for example
   `http://localhost:8080`). The BFF derives its OAuth2 callback URL
   (`/auth/callback`) and post-logout redirect URL (`/login`) from this value.
@@ -216,7 +236,6 @@ Environment variables:
   `redis://127.0.0.1:6379`). Required when `SESSION_STORAGE_TYPE=redis`.
 - `INSECURE_COOKIES` (default: `false`): if `true`, disables `Secure` on cookies
   for local HTTP development.
-- `CONTENT_SECURITY_POLICY` (default:
-  `default-src 'self'; script-src 'self'`):
+- `CONTENT_SECURITY_POLICY` (default: `default-src 'self'; script-src 'self'`):
   overrides the BFF `Content-Security-Policy` response header value.
 - `PORT` (default: `8080`): BFF listen port.
