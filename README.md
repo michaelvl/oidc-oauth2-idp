@@ -64,13 +64,13 @@ Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [int
                  │    ├─ /auth/avatar   ─┤
                  │    └─ /healthz       ─┘
                  │
-                 ├──► /api/* ──────────────────────────► API_BASE_URL/api/*
-                 │
                  ├──► /assets/*    ┐
                  │    /login       ├─ (no session) ────► STATIC_ASSETS_BASE_URL/*
                  │    /favicon.ico ┘
                  │
-                 └──► /* (session required) ───────────► STATIC_ASSETS_BASE_URL/*
+                 ├──► /*  ────── (session required) ───► STATIC_ASSETS_BASE_URL/*
+                 │
+                 └──► /api/* ─── (session required) ───► API_BASE_URL/api/*
 ```
 
 What it does:
