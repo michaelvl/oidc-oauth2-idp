@@ -77,7 +77,7 @@ func run(logger *slog.Logger) error {
 		APIPathPrefix:         bffCfg.APIPathPrefix,
 	})
 
-	apiProxy, err := handler.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL)
+	apiProxy, err := handler.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL, bffCfg.APIPathPrefix, bffCfg.APIUpstreamPathPrefix)
 	if err != nil {
 		return fmt.Errorf("initialize api proxy: %w", err)
 	}

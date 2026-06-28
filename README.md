@@ -70,7 +70,7 @@ Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [int
                  │
                  ├──► /*  ────── (session required) ───► STATIC_ASSETS_BASE_URL/*
                  │
-                 └──► $API_PATH_PREFIX/* ── (session required) ──► API_BASE_URL/$API_PATH_PREFIX/*
+                 └──► API_PATH_PREFIX/* ── (session required) ──► API_BASE_URL/API_UPSTREAM_PATH_PREFIX/*
 ```
 
 What it does:
@@ -103,11 +103,11 @@ Request flows and path handling:
     current session access token or `404` if no picture claim exists.
 - Protected SPA navigation: all other non-API routes (including `/`) require a
   valid BFF session; unauthenticated requests are redirected to `GET /login`.
-- API proxy paths: `$API_PATH_PREFIX` and `$API_PATH_PREFIX/*` are
+- API proxy paths: `API_PATH_PREFIX` and `API_PATH_PREFIX/*` are
   reverse-proxied to `API_BASE_URL` with `Authorization: Bearer <access_token>`
   injected from the server-side session. The prefix defaults to `/api` and is
   configurable via `API_PATH_PREFIX`.
-- CSRF-protected writes: non-GET/HEAD/OPTIONS requests to `$API_PATH_PREFIX/*`
+- CSRF-protected writes: non-GET/HEAD/OPTIONS requests to `API_PATH_PREFIX/*`
   and `POST /auth/logout` must include `X-CSRF-Token` matching the session CSRF
   token (set in the `csrf_token` cookie after login).
 
@@ -156,7 +156,7 @@ Browser/SPA       BFF (:8080)
    |<- 401 -----------|  (when no valid session)
 ```
 
-Authenticated API request through the BFF (`$API_PATH_PREFIX/*`, default `/api/*`):
+Authenticated API request through the BFF (`API_PATH_PREFIX/*`, default `/api/*`):
 
 ```text
 Browser/SPA       BFF (:8080)         API (:8081)
@@ -221,6 +221,12 @@ Environment variables:
 - `API_PATH_PREFIX` (default: `/api`): URL path prefix the BFF intercepts and
   reverse-proxies to `API_BASE_URL`. For example, set to `/graphql` if the
   upstream uses that path. Must start with `/`; trailing slashes are ignored.
+- `API_UPSTREAM_PATH_PREFIX` (default: same as `API_PATH_PREFIX`): path prefix
+  used when forwarding requests to `API_BASE_URL`. The BFF strips
+  `API_PATH_PREFIX` from the inbound path and prepends this value. Set to `/`
+  to strip the prefix entirely (e.g. inbound `/api/users` → upstream `/users`),
+  or to a different value to remap (e.g. `API_PATH_PREFIX=/api`,
+  `API_UPSTREAM_PATH_PREFIX=/v2` maps `/api/users` → `/v2/users`).
 - `STATIC_ASSETS_BASE_URL` (required): upstream static assets base URL for
   non-API routes.
 - `SESSION_COOKIE_NAME` (default: `session`): cookie name for the BFF session.

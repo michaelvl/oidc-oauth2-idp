@@ -33,7 +33,7 @@ func TestAPIProxy_ForwardsRequestAndInjectsBearer(t *testing.T) {
 	defer upstream.Close()
 
 	manager, cookie := seededSessionManager(t, "access-token-1")
-	proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, upstream.URL)
+	proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, upstream.URL, "/api", "/api")
 	if err != nil {
 		t.Fatalf("new api proxy: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestAPIProxy_ForwardsRequestAndInjectsBearer(t *testing.T) {
 
 func TestAPIProxy_ReturnsUnauthorizedWithoutSession(t *testing.T) {
 	manager := session.NewManager(session.NewMemoryStore(), "session", "01234567890123456789012345678901", true)
-	proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, "http://127.0.0.1:1")
+	proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, "http://127.0.0.1:1", "/api", "/api")
 	if err != nil {
 		t.Fatalf("new api proxy: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestAPIProxy_ReturnsUnauthorizedWithoutSession(t *testing.T) {
 
 func TestAPIProxy_ReturnsBadGatewayWhenUpstreamFails(t *testing.T) {
 	manager, cookie := seededSessionManager(t, "access-token-1")
-	proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, "http://127.0.0.1:1")
+	proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, "http://127.0.0.1:1", "/api", "/api")
 	if err != nil {
 		t.Fatalf("new api proxy: %v", err)
 	}
@@ -103,6 +103,71 @@ func TestAPIProxy_ReturnsBadGatewayWhenUpstreamFails(t *testing.T) {
 	}
 	if body["error"] != "bad gateway" {
 		t.Fatalf("expected bad gateway payload, got %#v", body)
+	}
+}
+
+func TestAPIProxy_RewritesUpstreamPath(t *testing.T) {
+	tests := []struct {
+		name               string
+		apiPathPrefix      string
+		upstreamPathPrefix string
+		requestPath        string
+		wantPath           string
+	}{
+		{
+			name:               "same prefix preserves path",
+			apiPathPrefix:      "/api",
+			upstreamPathPrefix: "/api",
+			requestPath:        "/api/v1/users",
+			wantPath:           "/api/v1/users",
+		},
+		{
+			name:               "different upstream prefix replaces inbound prefix",
+			apiPathPrefix:      "/api",
+			upstreamPathPrefix: "/v2",
+			requestPath:        "/api/v1/users",
+			wantPath:           "/v2/v1/users",
+		},
+		{
+			name:               "root upstream prefix strips inbound prefix",
+			apiPathPrefix:      "/api",
+			upstreamPathPrefix: "/",
+			requestPath:        "/api/v1/users",
+			wantPath:           "/v1/users",
+		},
+		{
+			name:               "exact prefix match",
+			apiPathPrefix:      "/api",
+			upstreamPathPrefix: "/v2",
+			requestPath:        "/api",
+			wantPath:           "/v2",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPath := ""
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer upstream.Close()
+
+			manager, cookie := seededSessionManager(t, "tok")
+			proxy, err := NewAPIProxy(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), manager, upstream.URL, tc.apiPathPrefix, tc.upstreamPathPrefix)
+			if err != nil {
+				t.Fatalf("new api proxy: %v", err)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, tc.requestPath, nil)
+			req.AddCookie(cookie)
+			rec := httptest.NewRecorder()
+			proxy.ServeHTTP(rec, req)
+
+			if gotPath != tc.wantPath {
+				t.Fatalf("expected upstream path %q, got %q", tc.wantPath, gotPath)
+			}
+		})
 	}
 }
 

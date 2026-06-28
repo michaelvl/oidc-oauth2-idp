@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"strings"
 
 	"oidc-oauth2-idp/bff/internal/session"
@@ -23,7 +24,7 @@ type StaticAssetsProxy struct {
 	proxy  *httputil.ReverseProxy
 }
 
-func NewAPIProxy(logger *slog.Logger, sessions *session.Manager, apiBaseURL string) (*APIProxy, error) {
+func NewAPIProxy(logger *slog.Logger, sessions *session.Manager, apiBaseURL, apiPathPrefix, upstreamPathPrefix string) (*APIProxy, error) {
 	if strings.TrimSpace(apiBaseURL) == "" {
 		return nil, errors.New("API_BASE_URL is required")
 	}
@@ -47,6 +48,12 @@ func NewAPIProxy(logger *slog.Logger, sessions *session.Manager, apiBaseURL stri
 	rp.Director = func(req *http.Request) {
 		originalDirector(req)
 		req.Host = target.Host
+		stripped := strings.TrimPrefix(req.URL.Path, apiPathPrefix)
+		req.URL.Path = path.Join(upstreamPathPrefix, stripped)
+		if req.URL.RawPath != "" {
+			strippedRaw := strings.TrimPrefix(req.URL.RawPath, apiPathPrefix)
+			req.URL.RawPath = path.Join(upstreamPathPrefix, strippedRaw)
+		}
 	}
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		logger.Warn("api_proxy_upstream_error", "error", err.Error(), "path", r.URL.Path)

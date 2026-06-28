@@ -9,20 +9,21 @@ import (
 )
 
 type BFFConfig struct {
-	OIDCIssuerURL         string
-	OIDCClientID          string
-	OIDCClientSecret      string
-	OIDCScopes            []string
-	BFFExternalURL        string
-	SessionSecret         string
-	SessionCookieName     string
-	SessionStorageType    string
-	RedisURL              string
-	APIBaseURL            string
-	APIPathPrefix         string
-	StaticAssetsBaseURL   string
-	ContentSecurityPolicy string
-	InsecureCookies       bool
+	OIDCIssuerURL          string
+	OIDCClientID           string
+	OIDCClientSecret       string
+	OIDCScopes             []string
+	BFFExternalURL         string
+	SessionSecret          string
+	SessionCookieName      string
+	SessionStorageType     string
+	RedisURL               string
+	APIBaseURL             string
+	APIPathPrefix          string
+	APIUpstreamPathPrefix  string
+	StaticAssetsBaseURL    string
+	ContentSecurityPolicy  string
+	InsecureCookies        bool
 }
 
 const DefaultContentSecurityPolicy = "default-src 'self'; script-src 'self'"
@@ -37,6 +38,12 @@ func LoadBFF() (BFFConfig, error) {
 		return BFFConfig{}, err
 	}
 
+	apiPathPrefix := normalizePathPrefix(defaultString("API_PATH_PREFIX", "/api"))
+	upstreamPathPrefix := apiPathPrefix
+	if raw := strings.TrimSpace(os.Getenv("API_UPSTREAM_PATH_PREFIX")); raw != "" {
+		upstreamPathPrefix = normalizePathPrefix(raw)
+	}
+
 	cfg := BFFConfig{
 		OIDCIssuerURL:         strings.TrimSpace(os.Getenv("OIDC_ISSUER_URL")),
 		OIDCClientID:          strings.TrimSpace(os.Getenv("OIDC_CLIENT_ID")),
@@ -48,7 +55,8 @@ func LoadBFF() (BFFConfig, error) {
 		SessionStorageType:    defaultString("SESSION_STORAGE_TYPE", "memory"),
 		RedisURL:              strings.TrimSpace(os.Getenv("REDIS_URL")),
 		APIBaseURL:            strings.TrimSpace(os.Getenv("API_BASE_URL")),
-		APIPathPrefix:         normalizePathPrefix(defaultString("API_PATH_PREFIX", "/api")),
+		APIPathPrefix:         apiPathPrefix,
+		APIUpstreamPathPrefix: upstreamPathPrefix,
 		StaticAssetsBaseURL:   strings.TrimSpace(os.Getenv("STATIC_ASSETS_BASE_URL")),
 		ContentSecurityPolicy: defaultString("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy),
 		InsecureCookies:       insecureCookies,

@@ -114,3 +114,32 @@ func TestLoadBFF_SessionStorageTypeUnknown_Fails(t *testing.T) {
 		t.Fatal("expected error for unknown SESSION_STORAGE_TYPE")
 	}
 }
+
+func TestLoadBFF_APIUpstreamPathPrefix_DefaultsToAPIPathPrefix(t *testing.T) {
+	seedRequiredBFFEnv(t)
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.APIUpstreamPathPrefix != cfg.APIPathPrefix {
+		t.Fatalf("expected APIUpstreamPathPrefix to default to APIPathPrefix %q, got %q", cfg.APIPathPrefix, cfg.APIUpstreamPathPrefix)
+	}
+}
+
+func TestLoadBFF_APIUpstreamPathPrefix_Override(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("API_PATH_PREFIX", "/api")
+	t.Setenv("API_UPSTREAM_PATH_PREFIX", "/v2")
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	if cfg.APIPathPrefix != "/api" {
+		t.Fatalf("expected APIPathPrefix /api, got %q", cfg.APIPathPrefix)
+	}
+	if cfg.APIUpstreamPathPrefix != "/v2" {
+		t.Fatalf("expected APIUpstreamPathPrefix /v2, got %q", cfg.APIUpstreamPathPrefix)
+	}
+}
