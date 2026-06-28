@@ -52,6 +52,7 @@ func (h *Handler) AuthGuard(next http.Handler) http.Handler {
 	})
 }
 
+// Proactively refresh the access token if it expires within this window.
 const tokenRefreshThreshold = 60 * time.Second
 
 func (h *Handler) refreshAccessToken(w http.ResponseWriter, r *http.Request, current session.Session) (session.Session, error) {
