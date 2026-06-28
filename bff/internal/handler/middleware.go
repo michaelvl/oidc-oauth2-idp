@@ -32,7 +32,7 @@ func (h *Handler) SecurityHeaders(next http.Handler) http.Handler {
 // and other explicitly public paths to pass through unchanged.
 func (h *Handler) AuthGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/login" || r.URL.Path == "/healthz" || r.URL.Path == "/favicon.ico" {
+		if strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, h.deps.APIPathPrefix+"/") || r.URL.Path == h.deps.APIPathPrefix || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/login" || r.URL.Path == "/healthz" || r.URL.Path == "/favicon.ico" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -80,7 +80,7 @@ func (h *Handler) refreshAccessToken(w http.ResponseWriter, r *http.Request, cur
 // If no token is available in session, it returns 401 instead of proxying.
 func (h *Handler) TokenForwarder(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
+		if !strings.HasPrefix(r.URL.Path, h.deps.APIPathPrefix+"/") && r.URL.Path != h.deps.APIPathPrefix {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -136,7 +136,7 @@ func (h *Handler) CSRFMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if !strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/auth/logout") {
+		if !strings.HasPrefix(r.URL.Path, h.deps.APIPathPrefix+"/") && r.URL.Path != h.deps.APIPathPrefix && !strings.HasPrefix(r.URL.Path, "/auth/logout") {
 			next.ServeHTTP(w, r)
 			return
 		}

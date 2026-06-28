@@ -70,7 +70,7 @@ Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [int
                  │
                  ├──► /*  ────── (session required) ───► STATIC_ASSETS_BASE_URL/*
                  │
-                 └──► /api/* ─── (session required) ───► API_BASE_URL/api/*
+                 └──► $API_PATH_PREFIX/* ── (session required) ──► API_BASE_URL/$API_PATH_PREFIX/*
 ```
 
 What it does:
@@ -103,11 +103,12 @@ Request flows and path handling:
     current session access token or `404` if no picture claim exists.
 - Protected SPA navigation: all other non-API routes (including `/`) require a
   valid BFF session; unauthenticated requests are redirected to `GET /login`.
-- API proxy paths: `/api` and `/api/*` are reverse-proxied to `API_BASE_URL`
-  with `Authorization: Bearer <access_token>` injected from the server-side
-  session.
-- CSRF-protected writes: non-GET/HEAD/OPTIONS requests to `/api/*` and
-  `POST /auth/logout` must include `X-CSRF-Token` matching the session CSRF
+- API proxy paths: `$API_PATH_PREFIX` and `$API_PATH_PREFIX/*` are
+  reverse-proxied to `API_BASE_URL` with `Authorization: Bearer <access_token>`
+  injected from the server-side session. The prefix defaults to `/api` and is
+  configurable via `API_PATH_PREFIX`.
+- CSRF-protected writes: non-GET/HEAD/OPTIONS requests to `$API_PATH_PREFIX/*`
+  and `POST /auth/logout` must include `X-CSRF-Token` matching the session CSRF
   token (set in the `csrf_token` cookie after login).
 
 Unauthenticated user opening `/` and signing in:
@@ -155,7 +156,7 @@ Browser/SPA       BFF (:8080)
    |<- 401 -----------|  (when no valid session)
 ```
 
-Authenticated API request through the BFF (`/api/*`):
+Authenticated API request through the BFF (`$API_PATH_PREFIX/*`, default `/api/*`):
 
 ```text
 Browser/SPA       BFF (:8080)         API (:8081)
@@ -216,7 +217,10 @@ Environment variables:
   (`/auth/callback`) and post-logout redirect URL (`/login`) from this value.
 - `SESSION_SECRET` (required): session signing/encryption secret, minimum 32
   bytes.
-- `API_BASE_URL` (required): upstream API base URL for `/api/*` proxying.
+- `API_BASE_URL` (required): upstream API base URL for API proxying.
+- `API_PATH_PREFIX` (default: `/api`): URL path prefix the BFF intercepts and
+  reverse-proxies to `API_BASE_URL`. For example, set to `/graphql` if the
+  upstream uses that path. Must start with `/`; trailing slashes are ignored.
 - `STATIC_ASSETS_BASE_URL` (required): upstream static assets base URL for
   non-API routes.
 - `SESSION_COOKIE_NAME` (default: `session`): cookie name for the BFF session.

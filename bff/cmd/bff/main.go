@@ -74,6 +74,7 @@ func run(logger *slog.Logger) error {
 		EndSessionEndpoint:    oidcDeps.EndSessionEndpoint,
 		ContentSecurityPolicy: bffCfg.ContentSecurityPolicy,
 		InsecureCookies:       bffCfg.InsecureCookies,
+		APIPathPrefix:         bffCfg.APIPathPrefix,
 	})
 
 	apiProxy, err := handler.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL)
@@ -86,7 +87,7 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("initialize static assets proxy: %w", err)
 	}
 
-	h := server.NewBFF(logger, staticAssetsProxy, authHandler, apiProxy)
+	h := server.NewBFF(logger, staticAssetsProxy, authHandler, apiProxy, bffCfg.APIPathPrefix)
 	addr := ":" + serverCfg.Port
 
 	logger.Info("starting bff", "addr", addr)

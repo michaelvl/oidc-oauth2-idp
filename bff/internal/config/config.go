@@ -19,6 +19,7 @@ type BFFConfig struct {
 	SessionStorageType    string
 	RedisURL              string
 	APIBaseURL            string
+	APIPathPrefix         string
 	StaticAssetsBaseURL   string
 	ContentSecurityPolicy string
 	InsecureCookies       bool
@@ -47,6 +48,7 @@ func LoadBFF() (BFFConfig, error) {
 		SessionStorageType:    defaultString("SESSION_STORAGE_TYPE", "memory"),
 		RedisURL:              strings.TrimSpace(os.Getenv("REDIS_URL")),
 		APIBaseURL:            strings.TrimSpace(os.Getenv("API_BASE_URL")),
+		APIPathPrefix:         normalizePathPrefix(defaultString("API_PATH_PREFIX", "/api")),
 		StaticAssetsBaseURL:   strings.TrimSpace(os.Getenv("STATIC_ASSETS_BASE_URL")),
 		ContentSecurityPolicy: defaultString("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy),
 		InsecureCookies:       insecureCookies,
@@ -137,6 +139,14 @@ func parseScopes(raw string) []string {
 		}
 	}
 	return scopes
+}
+
+func normalizePathPrefix(p string) string {
+	p = strings.TrimRight(p, "/")
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p
 }
 
 func parseBoolDefault(key string, fallback bool) (bool, error) {

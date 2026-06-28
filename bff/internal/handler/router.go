@@ -4,7 +4,7 @@ import (
 	"net/http"
 )
 
-func RegisterRoutes(mux *http.ServeMux, staticAssetsHandler http.Handler, auth *Handler, apiProxy http.Handler) {
+func RegisterRoutes(mux *http.ServeMux, staticAssetsHandler http.Handler, auth *Handler, apiProxy http.Handler, apiPathPrefix string) {
 	if mux == nil {
 		return
 	}
@@ -18,8 +18,8 @@ func RegisterRoutes(mux *http.ServeMux, staticAssetsHandler http.Handler, auth *
 	}
 
 	if apiProxy != nil {
-		mux.Handle("/api/", apiProxy)
-		mux.Handle("/api", apiProxy)
+		mux.Handle(apiPathPrefix+"/", apiProxy)
+		mux.Handle(apiPathPrefix, apiProxy)
 	}
 
 	if staticAssetsHandler != nil {

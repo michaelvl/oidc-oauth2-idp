@@ -32,6 +32,7 @@ type Dependencies struct {
 	AvatarHTTPClient      *http.Client
 	ContentSecurityPolicy string
 	InsecureCookies       bool
+	APIPathPrefix         string
 }
 
 type Handler struct {
@@ -42,6 +43,9 @@ type Handler struct {
 func New(deps Dependencies) *Handler {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
+	}
+	if deps.APIPathPrefix == "" {
+		deps.APIPathPrefix = "/api"
 	}
 	return &Handler{deps: deps, stateClaims: newStateClaims(oidcStateClaimTTL)}
 }
