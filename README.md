@@ -96,17 +96,25 @@ Request flows and path handling:
     callback
   - `/healthz` health endpoint for the BFF.
 - Authenticated BFF paths (returns `401` when not logged in):
-  - `GET /auth/me`returns OIDC claims. When a `picture` claim exists, its value
-    is rewritten to the BFF-local avatar endpoint (`/auth/avatar`) so the SPA
-    does not need to load IdP-origin image URLs directly.
+  - `GET /auth/me` returns OIDC claims from the current session's ID token.
+    Response is `200 application/json` with the fields below, or `401` when no
+    valid session exists, or `500` on an internal error.
+
+    | Field     | Type   | Required | Notes                                                          |
+    | --------- | ------ | -------- | -------------------------------------------------------------- |
+    | `sub`     | string | yes      | Subject identifier — always present (required by OIDC)         |
+    | `name`    | string | no       | Full display name — present only if the IdP includes it        |
+    | `email`   | string | no       | Email address — present only if the IdP includes it            |
+    | `picture` | string | no       | Rewritten to `/auth/avatar`; absent if the IdP omits the claim |
+
   - `GET /auth/avatar` proxies the user's avatar from the upstream IdP using the
     current session access token or `404` if no picture claim exists.
 - Protected SPA navigation: all other non-API routes (including `/`) require a
   valid BFF session; unauthenticated requests are redirected to `GET /login`.
-- API proxy paths: `API_PATH_PREFIX` and `API_PATH_PREFIX/*` are
-  reverse-proxied to `API_BASE_URL` with `Authorization: Bearer <access_token>`
-  injected from the server-side session. The prefix defaults to `/api` and is
-  configurable via `API_PATH_PREFIX`.
+- API proxy paths: `API_PATH_PREFIX` and `API_PATH_PREFIX/*` are reverse-proxied
+  to `API_BASE_URL` with `Authorization: Bearer <access_token>` injected from
+  the server-side session. The prefix defaults to `/api` and is configurable via
+  `API_PATH_PREFIX`.
 - CSRF-protected writes: non-GET/HEAD/OPTIONS requests to `API_PATH_PREFIX/*`
   and `POST /auth/logout` must include `X-CSRF-Token` matching the session CSRF
   token (set in the `csrf_token` cookie after login).
@@ -156,7 +164,8 @@ Browser/SPA       BFF (:8080)
    |<- 401 -----------|  (when no valid session)
 ```
 
-Authenticated API request through the BFF (`API_PATH_PREFIX/*`, default `/api/*`):
+Authenticated API request through the BFF (`API_PATH_PREFIX/*`, default
+`/api/*`):
 
 ```text
 Browser/SPA       BFF (:8080)         API (:8081)
@@ -223,9 +232,9 @@ Environment variables:
   upstream uses that path. Must start with `/`; trailing slashes are ignored.
 - `API_UPSTREAM_PATH_PREFIX` (default: same as `API_PATH_PREFIX`): path prefix
   used when forwarding requests to `API_BASE_URL`. The BFF strips
-  `API_PATH_PREFIX` from the inbound path and prepends this value. Set to `/`
-  to strip the prefix entirely (e.g. inbound `/api/users` → upstream `/users`),
-  or to a different value to remap (e.g. `API_PATH_PREFIX=/api`,
+  `API_PATH_PREFIX` from the inbound path and prepends this value. Set to `/` to
+  strip the prefix entirely (e.g. inbound `/api/users` → upstream `/users`), or
+  to a different value to remap (e.g. `API_PATH_PREFIX=/api`,
   `API_UPSTREAM_PATH_PREFIX=/v2` maps `/api/users` → `/v2/users`).
 - `STATIC_ASSETS_BASE_URL` (required): upstream static assets base URL for
   non-API routes.
