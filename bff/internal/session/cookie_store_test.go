@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 	"time"
 )
@@ -52,11 +53,15 @@ func TestCookieStore_TamperedToken(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	// flip last character to simulate tampering
-	tampered := token[:len(token)-1] + "X"
-	if tampered == token {
-		tampered = token[:len(token)-1] + "Y"
+	// Tamper at the raw-byte level so the change is always significant regardless
+	// of base64 trailing-bit alignment (flipping the last character is unreliable
+	// when n%3!=0 because both 'X' and 'Y' share the same top bits).
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatalf("decode saved token: %v", err)
 	}
+	raw[len(raw)/2] ^= 0xFF
+	tampered := base64.RawURLEncoding.EncodeToString(raw)
 
 	_, ok, err := store.Load(context.Background(), tampered)
 	if err != nil {
