@@ -54,7 +54,7 @@ services. It runs independently from the IdP and can be configured against any
 compatible OIDC issuer. The browser talks only to the BFF origin; the BFF
 handles login/session concerns and forwards requests to upstream services.
 
-TL;DR path routing:
+#### TL;DR path routing
 
 ```text
                       ┌─ /auth/login    ─┐
@@ -73,7 +73,7 @@ Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [int
                  └──► API_PATH_PREFIX/* ── (session required) ──► API_BASE_URL/API_UPSTREAM_PATH_PREFIX/*
 ```
 
-What it does:
+#### What it does
 
 - Runs Authorization Code + PKCE login flow (`/auth/login` -> IdP ->
   `/auth/callback`).
@@ -84,7 +84,7 @@ What it does:
 - Proxies API requests with injected bearer tokens and proxies static/SPA assets
   from a static upstream.
 
-Request flows and path handling:
+#### Request flows and path handling
 
 - Public paths (no session required):
   - `/assets/*` and `/favicon.ico`. These are forwarded to the application
@@ -181,7 +181,7 @@ Browser/SPA       BFF (:8080)         API (:8081)
 State-changing requests from the SPA (for example `POST /api/*` or
 `POST /auth/logout`) must include `X-CSRF-Token` from the `csrf_token` cookie.
 
-Security headers added by the BFF (all responses):
+#### Security headers added by the BFF (all responses)
 
 - `Strict-Transport-Security: max-age=63072000; includeSubDomains`
 - `X-Content-Type-Options: nosniff`
@@ -189,7 +189,7 @@ Security headers added by the BFF (all responses):
 - `Content-Security-Policy: default-src 'self'; script-src 'self'`
 - `Referrer-Policy: strict-origin-when-cross-origin`
 
-Architecture:
+#### Architecture
 
 ```text
 Browser (SPA)
@@ -213,7 +213,18 @@ Browser (SPA)
 +-----------+
 ```
 
-Environment variables:
+#### Processing middlewares
+
+| # | Middleware        | What it does                                                                                                                                                                                 |
+| - | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 | `RequestLogger`   | Logs method, path, status code, duration, and remote address for every request                                                                                                               |
+| 2 | `Recovery`        | Catches panics and returns a 500 JSON error                                                                                                                                                  |
+| 3 | `SecurityHeaders` | Adds HSTS, `X-Content-Type-Options`, `X-Frame-Options`, CSP, and `Referrer-Policy` to every response                                                                                         |
+| 4 | `AuthGuard`       | For SPA routes: redirects unauthenticated requests to `/login`. Defers auth for `/api/*` to `TokenForwarder`, and passes `/auth/`, `/assets/`, `/healthz` through without any session check  |
+| 5 | `CSRFMiddleware`  | Validates `X-CSRF-Token` on non-GET/HEAD/OPTIONS requests to `/api/*` and `/auth/logout`; rejects with 403 on mismatch                                                                       |
+| 6 | `TokenForwarder`  | For `/api/*`: reads the session, proactively refreshes the token if near expiry, injects `Authorization: Bearer <token>` into the upstream request, and returns 401 if no valid token exists |
+
+#### Environment variables
 
 - `OIDC_ISSUER_URL` (required): OIDC issuer URL.
 - `OIDC_CLIENT_ID` (required): OIDC client ID.
