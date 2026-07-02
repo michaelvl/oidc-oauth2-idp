@@ -408,6 +408,11 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	if sess, ok := s.sessions[sessionCookie]; ok {
 		sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
+		if existing := getClientSessionByID(sess, clientID); existing != nil && existing.RedirectURI != redirectURI {
+			s.log().Warn("redirectURI mismatch for existing session, updating to incoming value",
+				"stored", existing.RedirectURI, "incoming", redirectURI, "client_id", clientID)
+		}
+		sess = updateClientSessionRedirectURI(sess, clientID, redirectURI)
 		s.sessions[sessionCookie] = sess
 		s.mu.Unlock()
 		s.log().Info("authorize with existing session cookie", "session_id", sessionCookie)
@@ -435,6 +440,11 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		if existingSessionID != "" {
 			sess := s.sessions[existingSessionID]
 			sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
+			if existing := getClientSessionByID(sess, clientID); existing != nil && existing.RedirectURI != redirectURI {
+				s.log().Warn("redirectURI mismatch for existing session, updating to incoming value",
+					"stored", existing.RedirectURI, "incoming", redirectURI, "client_id", clientID)
+			}
+			sess = updateClientSessionRedirectURI(sess, clientID, redirectURI)
 			s.sessions[existingSessionID] = sess
 			s.mu.Unlock()
 			s.log().Info("found existing session by subject", "session_id", existingSessionID)
@@ -1072,6 +1082,16 @@ func updateClientSessionPKCE(sess session, clientID, codeChallenge, codeChalleng
 		if sess.ClientSessions[i].ClientID == clientID {
 			sess.ClientSessions[i].CodeChallenge = codeChallenge
 			sess.ClientSessions[i].CodeChallengeMethod = codeChallengeMethod
+			break
+		}
+	}
+	return sess
+}
+
+func updateClientSessionRedirectURI(sess session, clientID, redirectURI string) session {
+	for i := range sess.ClientSessions {
+		if sess.ClientSessions[i].ClientID == clientID {
+			sess.ClientSessions[i].RedirectURI = redirectURI
 			break
 		}
 	}
