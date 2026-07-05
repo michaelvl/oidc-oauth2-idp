@@ -176,6 +176,7 @@ func main() {
 	for i := 1; i <= 8; i++ {
 		path := fmt.Sprintf("/avatars/%d.svg", i)
 		mux.HandleFunc(path, srv.avatar)
+		mux.HandleFunc(fmt.Sprintf("/internal/avatars/%d.svg", i), srv.internalAvatar)
 	}
 
 	handler := withCORS(withLogging(logger, mux))
@@ -340,7 +341,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			CookieID:       cookieID,
 			Username:       sess.Username,
 			Sub:            sess.Sub,
-			AvatarURL:      s.avatarURL(sess.Username),
+			AvatarURL:      s.internalAvatarURL(sess.Username),
 			ClientSessions: clientViews,
 		})
 	}
@@ -365,21 +366,36 @@ func (s *server) avatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.protectPictureURL {
-		auth := r.Header.Get("Authorization")
-		parts := strings.Fields(auth)
-		if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		claims, err := s.extractAccessToken(r)
+		if err != nil {
+			s.writeBearerError(w, http.StatusUnauthorized, "invalid_token")
 			return
 		}
-		if _, err := s.decodeJWT(parts[1], s.publicKey); err != nil {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		csid, _ := claims["csid"].(string)
+		s.mu.Lock()
+		_, sess, cs := s.getSessionByClientSessionIDLocked(csid)
+		s.mu.Unlock()
+		if cs == nil {
+			s.writeBearerError(w, http.StatusUnauthorized, "invalid_token")
+			return
+		}
+		if filepath.Base(r.URL.Path) != fmt.Sprintf("%d.svg", avatarIndex(sess.Username)) {
+			s.writeBearerError(w, http.StatusForbidden, "invalid_token")
 			return
 		}
 	}
 
 	// Extract filename from path (e.g. /avatars/3.svg -> 3.svg)
+	name := filepath.Base(r.URL.Path)
+	w.Header().Set("Content-Type", "image/svg+xml")
+	http.ServeFile(w, r, filepath.Join(s.templatesDir, "avatars", name))
+}
+
+func (s *server) internalAvatar(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
 	name := filepath.Base(r.URL.Path)
 	w.Header().Set("Content-Type", "image/svg+xml")
 	http.ServeFile(w, r, filepath.Join(s.templatesDir, "avatars", name))
@@ -394,8 +410,8 @@ func avatarIndex(username string) int {
 	return (sum % 8) + 1
 }
 
-func (s *server) avatarURL(username string) string {
-	return fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(username))
+func (s *server) internalAvatarURL(username string) string {
+	return fmt.Sprintf("%s/internal/avatars/%d.svg", s.externalURL, avatarIndex(username))
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -551,7 +567,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		ReqID:                 reqID,
 		IDTokenClaimsJSON:     idTokenClaimsJSON,
 		AccessTokenClaimsJSON: accessTokenClaimsJSON,
-		AvatarURL:             s.avatarURL(username),
+		AvatarURL:             s.internalAvatarURL(username),
 	})
 }
 
@@ -593,7 +609,7 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			IDTokenClaimsJSON:     idTokenClaimsJSON,
 			AccessTokenClaimsJSON: accessTokenClaimsJSON,
 			ErrorText:             "ID token claims must be valid JSON object",
-			AvatarURL:             s.avatarURL(username),
+			AvatarURL:             s.internalAvatarURL(username),
 		})
 		return
 	}
@@ -606,7 +622,7 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			IDTokenClaimsJSON:     idTokenClaimsJSON,
 			AccessTokenClaimsJSON: accessTokenClaimsJSON,
 			ErrorText:             "Access token claims must be valid JSON object",
-			AvatarURL:             s.avatarURL(username),
+			AvatarURL:             s.internalAvatarURL(username),
 		})
 		return
 	}
@@ -899,26 +915,13 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	}
 	logRequest(s.log(), "userinfo", r)
 
-	auth := r.Header.Get("Authorization")
-	s.log().Debug("get-userinfo access token", "authorization", auth)
-	// FIXME: Validate that access-token is valid and current
-
-	parts := strings.Fields(auth)
-	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-		// FIXME: Return HTTP 401 with OAuth JSON error instead of HTML error template.
-		renderTemplate(w, s.templates["error"], errorData{Text: "Invalid authorization"})
-		return
-	}
-
-	claims, err := s.decodeJWT(parts[1], s.publicKey)
+	claims, err := s.extractAccessToken(r)
 	if err != nil {
-		renderTemplate(w, s.templates["error"], errorData{Text: "Invalid authorization"})
+		s.writeBearerError(w, http.StatusUnauthorized, "invalid_token")
 		return
 	}
 
 	scope, _ := claims["scope"].(string)
-	s.log().Debug("get-userinfo access token audience", "audience", claims["aud"])
-	// FIXME: Validate that the access token audience includes the /userinfo endpoint.
 	s.log().Debug("get-userinfo scope", "scope", scope)
 
 	csID, _ := claims["csid"].(string)
@@ -1069,6 +1072,24 @@ func (s *server) issueToken(subject string, audience []string, claims map[string
 	return signed, issued, nil
 }
 
+// extractAccessToken parses and validates the Authorization: Bearer header,
+// then confirms the token carries token_use=access so that ID tokens and
+// refresh tokens are rejected even though they are signed by the same key.
+func (s *server) extractAccessToken(r *http.Request) (map[string]any, error) {
+	parts := strings.Fields(r.Header.Get("Authorization"))
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+		return nil, errors.New("missing or malformed Authorization header")
+	}
+	claims, err := s.decodeJWT(parts[1], s.publicKey)
+	if err != nil {
+		return nil, err
+	}
+	if claims["token_use"] != "access" {
+		return nil, errors.New("token is not an access token")
+	}
+	return claims, nil
+}
+
 func (s *server) decodeJWT(token string, key *rsa.PublicKey) (map[string]any, error) {
 	tok, err := jwt.Parse(token, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
@@ -1097,6 +1118,11 @@ func writeOAuthError(w http.ResponseWriter, status int, code string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
+}
+
+func (s *server) writeBearerError(w http.ResponseWriter, status int, code string) {
+	w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s", error="%s"`, s.externalURL, code))
+	writeOAuthError(w, status, code)
 }
 
 func buildURL(base string, params map[string]string) string {

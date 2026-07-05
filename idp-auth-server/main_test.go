@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -259,7 +260,8 @@ func TestAvatarRequiresBearerWhenProtected(t *testing.T) {
 	}
 
 	srv := &server{
-		templatesDir:       templatesDir,
+		externalURL:       "http://127.0.0.1:5001",
+		templatesDir:      templatesDir,
 		protectPictureURL: true,
 		privateKey:        key,
 		publicKey:         &key.PublicKey,
@@ -273,8 +275,9 @@ func TestAvatarRequiresBearerWhenProtected(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
-	if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
-		t.Fatalf("expected WWW-Authenticate Bearer, got %q", got)
+	wantWWW := `Bearer realm="http://127.0.0.1:5001", error="invalid_token"`
+	if got := rec.Header().Get("WWW-Authenticate"); got != wantWWW {
+		t.Fatalf("expected WWW-Authenticate %q, got %q", wantWWW, got)
 	}
 }
 
@@ -295,20 +298,42 @@ func TestAvatarAcceptsBearerWhenProtected(t *testing.T) {
 		t.Fatalf("write avatar: %v", err)
 	}
 
+	csid := "test-client-session-id"
+	cookieID := "test-cookie-id"
 	srv := &server{
-		externalURL:        "http://127.0.0.1:5001",
-		templatesDir:       templatesDir,
+		externalURL:       "http://127.0.0.1:5001",
+		templatesDir:      templatesDir,
 		protectPictureURL: true,
 		privateKey:        key,
 		publicKey:         &key.PublicKey,
+		sessions: map[string]session{
+			cookieID: {
+				Username: "alice",
+				CookieID: cookieID,
+				ClientSessions: []clientSession{
+					{SessionID: csid},
+				},
+			},
+		},
 	}
 
-	token, _, err := srv.issueToken("alice", []string{"api"}, map[string]any{"scope": "openid profile"}, time.Now().Add(5*time.Minute))
+	// alice maps to avatar index 7
+	avatarIdx := avatarIndex("alice")
+	avatarFile := fmt.Sprintf("%d.svg", avatarIdx)
+	if err := os.WriteFile(filepath.Join(avatarDir, avatarFile), []byte("<svg></svg>"), 0o644); err != nil {
+		t.Fatalf("write avatar: %v", err)
+	}
+
+	token, _, err := srv.issueToken("alice", []string{"api"}, map[string]any{
+		"scope":     "openid profile",
+		"token_use": "access",
+		"csid":      csid,
+	}, time.Now().Add(5*time.Minute))
 	if err != nil {
 		t.Fatalf("issue token: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/avatars/1.svg", nil)
+	req := httptest.NewRequest(http.MethodGet, "/avatars/"+avatarFile, nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 
