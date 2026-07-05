@@ -94,12 +94,12 @@ func TestGetClientSessionByID(t *testing.T) {
 	t.Parallel()
 
 	sess := session{
-		Username:  "alice",
-		Sub:       "xxalicexx",
-		SessionID: "s1",
+		Username: "alice",
+		Sub:      "xxalicexx",
+		CookieID: "s1",
 		ClientSessions: []clientSession{
-			{ClientID: "c1", Scope: "openid"},
-			{ClientID: "c2", Scope: "openid profile"},
+			{SessionID: "cs1", ClientID: "c1", Scope: "openid"},
+			{SessionID: "cs2", ClientID: "c2", Scope: "openid profile"},
 		},
 	}
 

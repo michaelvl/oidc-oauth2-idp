@@ -31,6 +31,7 @@ import (
 const sessionCookieName = "session"
 
 type clientSession struct {
+	SessionID           string // per-RP login ID; used as csid claim in tokens
 	ClientID            string
 	AdvertisedSub       string // the sub value sent to this RP (public: internal Sub; pairwise: HMAC of Sub)
 	Scope               string
@@ -45,7 +46,7 @@ type clientSession struct {
 type session struct {
 	Username       string // the username entered at login; used for profile claims only
 	Sub            string // the real/internal subject identifier; basis for AdvertisedSub
-	SessionID      string
+	CookieID       string // IdP browser-session cookie value; map key for s.sessions
 	ClientSessions []clientSession
 }
 
@@ -63,9 +64,9 @@ type authContextEntry struct {
 }
 
 type codeMetadataEntry struct {
-	SessionID string
-	ClientID  string
-	Nonce     string
+	CookieID string // parent session CookieID; used to look up the session at token exchange
+	ClientID string
+	Nonce    string
 }
 
 type server struct {
@@ -308,7 +309,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	views := make([]sessionView, 0, len(s.sessions))
-	for sessionID, sess := range s.sessions {
+	for cookieID, sess := range s.sessions {
 		clientViews := make([]clientSessionView, 0, len(sess.ClientSessions))
 		for _, clientSess := range sess.ClientSessions {
 			idTokenClaimsJSON, err := claimsToPrettyJSON(clientSess.IDTokenClaims)
@@ -336,7 +337,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		views = append(views, sessionView{
-			SessionID:      sessionID,
+			SessionID:      cookieID,
 			Username:       sess.Username,
 			Sub:            sess.Sub,
 			AvatarURL:      s.avatarURL(sess.Username),
@@ -403,11 +404,11 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	sessionID := r.Form.Get("sessionid")
-	s.log().Info("logout", "session_id", sessionID)
+	cookieID := r.Form.Get("sessionid")
+	s.log().Info("logout", "cookie_id", cookieID)
 
 	s.mu.Lock()
-	delete(s.sessions, sessionID)
+	delete(s.sessions, cookieID)
 	s.mu.Unlock()
 
 	http.Redirect(w, r, s.externalURL, http.StatusSeeOther)
@@ -537,7 +538,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
 	}
-	accessTokenClaimsJSON, err := claimsToPrettyJSON(defaultAccessTokenClaims(username, ctx.Scope, s.externalURL))
+	accessTokenClaimsJSON, err := claimsToPrettyJSON(defaultAccessTokenClaims(ctx.Scope, ""))
 	if err != nil {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
@@ -614,9 +615,20 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 	delete(s.authContext, reqID)
 	sess, found := s.getSessionBySubLocked(sub)
 	if !found {
-		sess = session{Username: username, Sub: sub, SessionID: uuid.NewString()}
+		sess = session{Username: username, Sub: sub, CookieID: uuid.NewString()}
+	}
+	csSessionID := ""
+	for _, cs := range sess.ClientSessions {
+		if cs.ClientID == ctx.ClientID {
+			csSessionID = cs.SessionID
+			break
+		}
+	}
+	if csSessionID == "" {
+		csSessionID = uuid.NewString()
 	}
 	sess.ClientSessions = upsertClientSession(sess.ClientSessions, clientSession{
+		SessionID:           csSessionID,
 		ClientID:            ctx.ClientID,
 		AdvertisedSub:       s.computeAdvertisedSub(sub, sectorIdentifier(ctx.RedirectURI, ctx.ClientID)),
 		Scope:               ctx.Scope,
@@ -626,11 +638,11 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		IDTokenClaims:       idTokenClaims,
 		AccessTokenClaims:   accessTokenClaims,
 	})
-	s.sessions[sess.SessionID] = sess
+	s.sessions[sess.CookieID] = sess
 	s.mu.Unlock()
 
 	s.log().Info("user authorized", "username", username, "scope", ctx.Scope, "client_id", ctx.ClientID)
-	s.log().Info("created session", "session_id", sess.SessionID)
+	s.log().Info("created session", "cookie_id", sess.CookieID, "client_session_id", csSessionID)
 
 	s.issueCodeAndRedirect(w, r, sess, ctx.ClientID, ctx.State, ctx.Nonce)
 }
@@ -639,7 +651,7 @@ func (s *server) issueCodeAndRedirect(w http.ResponseWriter, r *http.Request, se
 	code := uuid.NewString()
 
 	s.mu.Lock()
-	s.codeMeta[code] = codeMetadataEntry{SessionID: sess.SessionID, ClientID: clientID, Nonce: nonce}
+	s.codeMeta[code] = codeMetadataEntry{CookieID: sess.CookieID, ClientID: clientID, Nonce: nonce}
 	s.mu.Unlock()
 
 	clientSess := getClientSessionByID(sess, clientID)
@@ -653,7 +665,7 @@ func (s *server) issueCodeAndRedirect(w http.ResponseWriter, r *http.Request, se
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    sess.SessionID,
+		Value:    sess.CookieID,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -681,7 +693,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		username        string
 		scope           string
 		clientID        string
-		sessionID       string
+		cookieID        string
+		clientSessionID string
 		nonce           string
 		idTokenClaims   map[string]any
 		accessClaims    map[string]any
@@ -711,12 +724,12 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		// FIXME: Validate that the authorization code has not expired (track issued-at in codeMeta).
 
 		s.log().Debug("get-token valid code", "code", code)
-		sessionID = meta.SessionID
+		cookieID = meta.CookieID
 		clientID = meta.ClientID
 		nonce = meta.Nonce
 
 		s.mu.Lock()
-		sess, ok := s.sessions[sessionID]
+		sess, ok := s.sessions[cookieID]
 		s.mu.Unlock()
 		if !ok {
 			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
@@ -758,10 +771,12 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		if idTokenClaims == nil {
 			idTokenClaims = defaultIDTokenClaims(username, scope, clientID, nonce, s.externalURL)
 		}
+		clientSessionID = clientSess.SessionID
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
-			accessClaims = defaultAccessTokenClaims(username, scope, s.externalURL)
+			accessClaims = defaultAccessTokenClaims(scope, clientSessionID)
 		}
+		accessClaims["csid"] = clientSessionID
 		accessLifetime = s.accessTokenLifetime
 		refreshLifetime = s.refreshTokenLifetime
 
@@ -774,43 +789,39 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
 			return
 		}
-
-		sessionID, _ = refreshClaims["session_id"].(string)
-		clientID, _ = refreshClaims["client_id"].(string)
-		s.mu.Lock()
-		sess, ok := s.sessions[sessionID]
-		s.mu.Unlock()
-		if !ok {
-			s.log().Warn("get-token invalid session for refresh", "session_id", sessionID)
-			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
-			return
-		}
 		// FIXME: Validate refresh token beyond JWT signature - check for revocation.
 
-		clientSess := getClientSessionByID(sess, clientID)
+		csID, _ := refreshClaims["csid"].(string)
+		s.mu.Lock()
+		var sess session
+		var clientSess *clientSession
+		cookieID, sess, clientSess = s.getSessionByClientSessionIDLocked(csID)
+		s.mu.Unlock()
 		if clientSess == nil {
+			s.log().Warn("get-token invalid client session for refresh", "client_session_id", csID)
 			writeOAuthError(w, http.StatusUnauthorized, "invalid_grant")
 			return
 		}
 
+		clientID = clientSess.ClientID
 		username = sess.Username
 		advertisedSub = clientSess.AdvertisedSub
-		if advertisedSub == "" {
-			// Fallback for sessions predating AdvertisedSub storage.
-			advertisedSub, _ = refreshClaims["sub"].(string)
-		}
 		scope = clientSess.Scope
-		nonce, _ = refreshClaims["nonce"].(string)
+		if clientSess.IDTokenClaims != nil {
+			nonce, _ = clientSess.IDTokenClaims["nonce"].(string)
+		}
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
 			idTokenClaims = defaultIDTokenClaims(username, scope, clientID, nonce, s.externalURL)
 		}
+		clientSessionID = clientSess.SessionID
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
-			accessClaims = defaultAccessTokenClaims(username, scope, s.externalURL)
+			accessClaims = defaultAccessTokenClaims(scope, clientSessionID)
 		}
-		accessLifetime = intFromAny(refreshClaims["access_token_lifetime"], s.accessTokenLifetime)
-		refreshLifetime = intFromAny(refreshClaims["refresh_token_lifetime"], s.refreshTokenLifetime)
+		accessClaims["csid"] = clientSessionID
+		accessLifetime = s.accessTokenLifetime
+		refreshLifetime = s.refreshTokenLifetime
 
 	default:
 		s.log().Warn("get-token invalid grant type", "grant_type", grantType)
@@ -836,13 +847,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if hasScope(scope, "offline_access") {
 		refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
 		refreshToken, refreshClaims, issueErr := s.issueToken(advertisedSub, refreshAud, map[string]any{
-			"client_id":              clientID,
-			"session_id":             sessionID,
-			"access_token_lifetime":  accessLifetime,
-			"refresh_token_lifetime": refreshLifetime,
-			"nonce":                  nonce,
-			"token_use":              "refresh",
-			"scope":                  scope,
+			"token_use":         "refresh",
+			"csid": clientSessionID,
 		}, time.Now().UTC().Add(time.Duration(refreshLifetime)*time.Second))
 		if issueErr != nil {
 			http.Error(w, "token issue error", http.StatusInternalServerError)
@@ -866,9 +872,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	// Update the stored session with the full claim sets as last issued so the
 	// sessions page reflects exactly what was put in the tokens.
 	s.mu.Lock()
-	if sess, ok := s.sessions[sessionID]; ok {
+	if sess, ok := s.sessions[cookieID]; ok {
 		for i := range sess.ClientSessions {
-			if sess.ClientSessions[i].ClientID == clientID {
+			if sess.ClientSessions[i].SessionID == clientSessionID {
 				sess.ClientSessions[i].AdvertisedSub = advertisedSub
 				sess.ClientSessions[i].AccessTokenClaims = issuedAccessClaims
 				sess.ClientSessions[i].RefreshTokenClaims = issuedRefreshClaims
@@ -878,7 +884,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		s.sessions[sessionID] = sess
+		s.sessions[cookieID] = sess
 	}
 	s.mu.Unlock()
 
@@ -895,6 +901,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 
 	auth := r.Header.Get("Authorization")
 	s.log().Debug("get-userinfo access token", "authorization", auth)
+	// FIXME: Validate that access-token is valid and current
 
 	parts := strings.Fields(auth)
 	if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
@@ -914,17 +921,18 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	// FIXME: Validate that the access token audience includes the /userinfo endpoint.
 	s.log().Debug("get-userinfo scope", "scope", scope)
 
+	csID, _ := claims["csid"].(string)
+	s.mu.Lock()
+	_, sess, _ := s.getSessionByClientSessionIDLocked(csID)
+	s.mu.Unlock()
+
 	out := map[string]any{}
 	sub, _ := claims["sub"].(string)
 	out["sub"] = sub
-	if strings.Contains(scope, "profile") {
-		username, _ := claims["preferred_username"].(string)
-		if username == "" {
-			username = sub // fallback for tokens predating preferred_username
-		}
-		out["name"] = capitalize(username)
-		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(username))
-		out["preferred_username"] = username
+	if sess.Username != "" && strings.Contains(scope, "profile") {
+		out["preferred_username"] = sess.Username
+		out["name"] = capitalize(sess.Username)
+		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sess.Username))
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -969,12 +977,12 @@ func (s *server) endsessionApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	sessionID := r.Form.Get("sessionid")
+	cookieID := r.Form.Get("sessionid")
 	redirURL := r.Form.Get("redirurl")
 
-	s.log().Info("ending session", "session_id", sessionID)
+	s.log().Info("ending session", "cookie_id", cookieID)
 	s.mu.Lock()
-	delete(s.sessions, sessionID)
+	delete(s.sessions, cookieID)
 	s.mu.Unlock()
 
 	http.Redirect(w, r, redirURL, http.StatusSeeOther)
@@ -1117,14 +1125,30 @@ func (s *server) getSessionBySubLocked(sub string) (session, bool) {
 // getSessionByAdvertisedSubLocked finds a session by the AdvertisedSub stored in any of its
 // clientSessions. Used when matching an id_token_hint's sub claim back to an SSO session.
 func (s *server) getSessionByAdvertisedSubLocked(advertisedSub string) string {
-	for sessionID, sess := range s.sessions {
+	for cookieID, sess := range s.sessions {
 		for _, cs := range sess.ClientSessions {
 			if cs.AdvertisedSub == advertisedSub {
-				return sessionID
+				return cookieID
 			}
 		}
 	}
 	return ""
+}
+
+// getSessionByClientSessionIDLocked finds a session and clientSession by the clientSession's SessionID.
+// Returns the parent CookieID, the session, and a pointer to the matching clientSession (or "" / zero / nil).
+func (s *server) getSessionByClientSessionIDLocked(csID string) (string, session, *clientSession) {
+	if csID == "" {
+		return "", session{}, nil
+	}
+	for cookieID, sess := range s.sessions {
+		for i := range sess.ClientSessions {
+			if sess.ClientSessions[i].SessionID == csID {
+				return cookieID, sess, &sess.ClientSessions[i]
+			}
+		}
+	}
+	return "", session{}, nil
 }
 
 func getClientSessionByID(sess session, clientID string) *clientSession {
@@ -1260,17 +1284,12 @@ func parseClaimsJSON(raw string) (map[string]any, error) {
 	return claims, nil
 }
 
-func defaultAccessTokenClaims(username, scope, externalURL string) map[string]any {
-	claims := map[string]any{
-		"token_use": "access",
-		"scope":     scope,
+func defaultAccessTokenClaims(scope, clientSessionID string) map[string]any {
+	return map[string]any{
+		"token_use":         "access",
+		"scope":             scope,
+		"csid": clientSessionID,
 	}
-	if strings.Contains(scope, "profile") {
-		claims["preferred_username"] = username
-		claims["name"] = capitalize(username)
-		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(username))
-	}
-	return claims
 }
 
 func hasScope(scope, target string) bool {
