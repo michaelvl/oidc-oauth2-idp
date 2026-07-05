@@ -44,6 +44,13 @@ Login accepts any username and requires password `valid`.
   - Access token lifetime in seconds.
 - `REFRESH_TOKEN_LIFETIME` (default: `3600`)
   - Refresh token lifetime in seconds.
+- `SUBJECT_TYPE` (default: `public`)
+  - Subject identifier type: `public` or `pairwise`.
+  - `public`: every RP receives the same `sub` for a given user.
+  - `pairwise`: each RP receives a distinct, opaque `sub` derived via HMAC from the RP's sector identifier (host component of `redirect_uri`) and the user's internal subject. RPs cannot correlate users across sites.
+- `PAIRWISE_SALT` (required when `SUBJECT_TYPE=pairwise`)
+  - Hex-encoded HMAC-SHA256 secret, minimum 16 bytes (32 hex characters).
+  - Example: `PAIRWISE_SALT=$(openssl rand -hex 32)`
 
 ## Development commands
 

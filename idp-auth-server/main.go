@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -30,6 +32,7 @@ const sessionCookieName = "session"
 
 type clientSession struct {
 	ClientID            string
+	AdvertisedSub       string // the sub value sent to this RP (public: internal Sub; pairwise: HMAC of Sub)
 	Scope               string
 	RedirectURI         string
 	CodeChallenge       string
@@ -40,7 +43,8 @@ type clientSession struct {
 }
 
 type session struct {
-	Subject        string
+	Username       string // the username entered at login; used for profile claims only
+	Sub            string // the real/internal subject identifier; basis for AdvertisedSub
 	SessionID      string
 	ClientSessions []clientSession
 }
@@ -54,7 +58,8 @@ type authContextEntry struct {
 	Nonce               string
 	CodeChallenge       string
 	CodeChallengeMethod string
-	Subject             string
+	Username            string
+	Sub                 string
 }
 
 type codeMetadataEntry struct {
@@ -83,6 +88,9 @@ type server struct {
 	accessTokenLifetime  int
 	refreshTokenLifetime int
 
+	subjectType  string // "public" or "pairwise"
+	pairwiseSalt []byte // HMAC-SHA256 key; only set when subjectType == "pairwise"
+
 	privateKey *rsa.PrivateKey
 	publicKey  *rsa.PublicKey
 }
@@ -93,13 +101,15 @@ type indexData struct {
 
 type sessionView struct {
 	SessionID      string
-	Subject        string
+	Username       string
+	Sub            string
 	AvatarURL      string
 	ClientSessions []clientSessionView
 }
 
 type clientSessionView struct {
 	ClientID              string
+	AdvertisedSub         string
 	Scope                 string
 	IDTokenIssued         bool
 	RefreshTokenIssued    bool
@@ -202,6 +212,25 @@ func newServer(logger *slog.Logger) (*server, error) {
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
+	subjectType := getenvDefault("SUBJECT_TYPE", "public")
+	var pairwiseSalt []byte
+	if subjectType == "pairwise" {
+		saltHex := getenvDefault("PAIRWISE_SALT", "")
+		if saltHex == "" {
+			return nil, fmt.Errorf("PAIRWISE_SALT is required when SUBJECT_TYPE=pairwise")
+		}
+		var err error
+		pairwiseSalt, err = hex.DecodeString(saltHex)
+		if err != nil {
+			return nil, fmt.Errorf("invalid PAIRWISE_SALT (expected hex): %w", err)
+		}
+		if len(pairwiseSalt) < 16 {
+			return nil, fmt.Errorf("PAIRWISE_SALT must be at least 16 bytes (32 hex chars)")
+		}
+	} else if subjectType != "public" {
+		return nil, fmt.Errorf("invalid SUBJECT_TYPE %q (expected: public, pairwise)", subjectType)
+	}
+
 	logger.Info("generating keys")
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -227,6 +256,8 @@ func newServer(logger *slog.Logger) (*server, error) {
 		extraAudiences:       extraAudiences,
 		accessTokenLifetime:  accessLifetime,
 		refreshTokenLifetime: refreshLifetime,
+		subjectType:          subjectType,
+		pairwiseSalt:         pairwiseSalt,
 		privateKey:           privateKey,
 		publicKey:            &privateKey.PublicKey,
 	}, nil
@@ -293,6 +324,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			refreshTokenExpiry := formatExpiryClaim(clientSess.RefreshTokenClaims)
 			clientViews = append(clientViews, clientSessionView{
 				ClientID:              clientSess.ClientID,
+				AdvertisedSub:         clientSess.AdvertisedSub,
 				Scope:                 clientSess.Scope,
 				IDTokenIssued:         clientSess.IDTokenClaims != nil,
 				RefreshTokenIssued:    clientSess.RefreshTokenClaims != nil,
@@ -305,8 +337,9 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		}
 		views = append(views, sessionView{
 			SessionID:      sessionID,
-			Subject:        sess.Subject,
-			AvatarURL:      s.avatarURL(sess.Subject),
+			Username:       sess.Username,
+			Sub:            sess.Sub,
+			AvatarURL:      s.avatarURL(sess.Username),
 			ClientSessions: clientViews,
 		})
 	}
@@ -434,9 +467,9 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 
 		s.log().Debug("id_token_hint claims", "claims", idTokenClaims)
 
-		subject, _ := idTokenClaims["sub"].(string)
+		advertisedSub, _ := idTokenClaims["sub"].(string)
 		s.mu.Lock()
-		existingSessionID := s.getSessionBySubjectLocked(subject)
+		existingSessionID := s.getSessionByAdvertisedSubLocked(advertisedSub)
 		if existingSessionID != "" {
 			sess := s.sessions[existingSessionID]
 			sess = updateClientSessionPKCE(sess, clientID, codeChallenge, codeChallengeMethod)
@@ -483,7 +516,8 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	reqID := r.Form.Get("reqid")
-	subject := r.Form.Get("username")
+	username := r.Form.Get("username")
+	sub := "xx" + username + "xx" // internal subject: stable, distinct from username
 	password := r.Form.Get("password")
 
 	if password != "valid" {
@@ -493,16 +527,17 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	ctx := s.authContext[reqID]
-	ctx.Subject = subject
+	ctx.Username = username
+	ctx.Sub = sub
 	s.authContext[reqID] = ctx
 	s.mu.Unlock()
 
-	idTokenClaimsJSON, err := claimsToPrettyJSON(defaultIDTokenClaims(subject, ctx.Scope, ctx.ClientID, ctx.Nonce, s.externalURL))
+	idTokenClaimsJSON, err := claimsToPrettyJSON(defaultIDTokenClaims(username, ctx.Scope, ctx.ClientID, ctx.Nonce, s.externalURL))
 	if err != nil {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
 	}
-	accessTokenClaimsJSON, err := claimsToPrettyJSON(defaultAccessTokenClaims(subject, ctx.Scope))
+	accessTokenClaimsJSON, err := claimsToPrettyJSON(defaultAccessTokenClaims(username, ctx.Scope, s.externalURL))
 	if err != nil {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
@@ -515,7 +550,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		ReqID:                 reqID,
 		IDTokenClaimsJSON:     idTokenClaimsJSON,
 		AccessTokenClaimsJSON: accessTokenClaimsJSON,
-		AvatarURL:             s.avatarURL(subject),
+		AvatarURL:             s.avatarURL(username),
 	})
 }
 
@@ -535,8 +570,9 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subject := ctx.Subject
-	s.log().Info("approve request", "subject", subject, "request_id", reqID)
+	username := ctx.Username
+	sub := ctx.Sub
+	s.log().Info("approve request", "username", username, "request_id", reqID)
 
 	if _, ok := r.Form["approve"]; !ok {
 		renderTemplate(w, s.templates["error"], errorData{Text: "Not approved"})
@@ -556,7 +592,7 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			IDTokenClaimsJSON:     idTokenClaimsJSON,
 			AccessTokenClaimsJSON: accessTokenClaimsJSON,
 			ErrorText:             "ID token claims must be valid JSON object",
-			AvatarURL:             s.avatarURL(subject),
+			AvatarURL:             s.avatarURL(username),
 		})
 		return
 	}
@@ -569,36 +605,32 @@ func (s *server) approve(w http.ResponseWriter, r *http.Request) {
 			IDTokenClaimsJSON:     idTokenClaimsJSON,
 			AccessTokenClaimsJSON: accessTokenClaimsJSON,
 			ErrorText:             "Access token claims must be valid JSON object",
-			AvatarURL:             s.avatarURL(subject),
+			AvatarURL:             s.avatarURL(username),
 		})
 		return
 	}
 
 	s.mu.Lock()
 	delete(s.authContext, reqID)
-	existingSessionID := s.getSessionBySubjectLocked(subject)
-	sessionID := existingSessionID
-	if sessionID == "" {
-		sessionID = uuid.NewString()
+	sess, found := s.getSessionBySubLocked(sub)
+	if !found {
+		sess = session{Username: username, Sub: sub, SessionID: uuid.NewString()}
 	}
-	sess := session{
-		Subject:   subject,
-		SessionID: sessionID,
-		ClientSessions: []clientSession{{
-			ClientID:            ctx.ClientID,
-			Scope:               ctx.Scope,
-			RedirectURI:         ctx.RedirectURI,
-			CodeChallenge:       ctx.CodeChallenge,
-			CodeChallengeMethod: ctx.CodeChallengeMethod,
-			IDTokenClaims:       idTokenClaims,
-			AccessTokenClaims:   accessTokenClaims,
-		}},
-	}
-	s.sessions[sessionID] = sess
+	sess.ClientSessions = upsertClientSession(sess.ClientSessions, clientSession{
+		ClientID:            ctx.ClientID,
+		AdvertisedSub:       s.computeAdvertisedSub(sub, sectorIdentifier(ctx.RedirectURI, ctx.ClientID)),
+		Scope:               ctx.Scope,
+		RedirectURI:         ctx.RedirectURI,
+		CodeChallenge:       ctx.CodeChallenge,
+		CodeChallengeMethod: ctx.CodeChallengeMethod,
+		IDTokenClaims:       idTokenClaims,
+		AccessTokenClaims:   accessTokenClaims,
+	})
+	s.sessions[sess.SessionID] = sess
 	s.mu.Unlock()
 
-	s.log().Info("user authorized", "subject", subject, "scope", ctx.Scope, "client_id", ctx.ClientID)
-	s.log().Info("created session", "session_id", sessionID)
+	s.log().Info("user authorized", "username", username, "scope", ctx.Scope, "client_id", ctx.ClientID)
+	s.log().Info("created session", "session_id", sess.SessionID)
 
 	s.issueCodeAndRedirect(w, r, sess, ctx.ClientID, ctx.State, ctx.Nonce)
 }
@@ -645,7 +677,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	s.log().Debug("get-token grant type", "grant_type", grantType)
 
 	var (
-		subject         string
+		advertisedSub   string
+		username        string
 		scope           string
 		clientID        string
 		sessionID       string
@@ -690,7 +723,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		subject = sess.Subject
+		username = sess.Username
 		clientSess := getClientSessionByID(sess, clientID)
 		if clientSess == nil {
 			writeOAuthError(w, http.StatusForbidden, "invalid_grant")
@@ -719,14 +752,15 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		advertisedSub = s.computeAdvertisedSub(sess.Sub, sectorIdentifier(clientSess.RedirectURI, clientID))
 		scope = clientSess.Scope
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
-			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce, s.externalURL)
+			idTokenClaims = defaultIDTokenClaims(username, scope, clientID, nonce, s.externalURL)
 		}
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
-			accessClaims = defaultAccessTokenClaims(subject, scope)
+			accessClaims = defaultAccessTokenClaims(username, scope, s.externalURL)
 		}
 		accessLifetime = s.accessTokenLifetime
 		refreshLifetime = s.refreshTokenLifetime
@@ -759,16 +793,21 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		subject, _ = refreshClaims["sub"].(string)
+		username = sess.Username
+		advertisedSub = clientSess.AdvertisedSub
+		if advertisedSub == "" {
+			// Fallback for sessions predating AdvertisedSub storage.
+			advertisedSub, _ = refreshClaims["sub"].(string)
+		}
 		scope = clientSess.Scope
 		nonce, _ = refreshClaims["nonce"].(string)
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
-			idTokenClaims = defaultIDTokenClaims(subject, scope, clientID, nonce, s.externalURL)
+			idTokenClaims = defaultIDTokenClaims(username, scope, clientID, nonce, s.externalURL)
 		}
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
-			accessClaims = defaultAccessTokenClaims(subject, scope)
+			accessClaims = defaultAccessTokenClaims(username, scope, s.externalURL)
 		}
 		accessLifetime = intFromAny(refreshClaims["access_token_lifetime"], s.accessTokenLifetime)
 		refreshLifetime = intFromAny(refreshClaims["refresh_token_lifetime"], s.refreshTokenLifetime)
@@ -781,7 +820,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	s.log().Info("issuing tokens", "grant_type", grantType, "client_id", clientID)
 	accessAud := dedupeStrings(append([]string{s.externalURL + "/userinfo"}, s.extraAudiences...))
-	accessToken, issuedAccessClaims, err := s.issueToken(subject, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
+	accessToken, issuedAccessClaims, err := s.issueToken(advertisedSub, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
 	if err != nil {
 		http.Error(w, "token issue error", http.StatusInternalServerError)
 		return
@@ -796,7 +835,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	var issuedRefreshClaims map[string]any
 	if hasScope(scope, "offline_access") {
 		refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
-		refreshToken, refreshClaims, issueErr := s.issueToken(subject, refreshAud, map[string]any{
+		refreshToken, refreshClaims, issueErr := s.issueToken(advertisedSub, refreshAud, map[string]any{
 			"client_id":              clientID,
 			"session_id":             sessionID,
 			"access_token_lifetime":  accessLifetime,
@@ -816,7 +855,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	var issuedIDTokenClaims map[string]any
 	if strings.Contains(scope, "openid") {
 		var idToken string
-		idToken, issuedIDTokenClaims, err = s.issueToken(subject, []string{clientID}, idTokenClaims, time.Now().UTC().Add(60*time.Minute))
+		idToken, issuedIDTokenClaims, err = s.issueToken(advertisedSub, []string{clientID}, idTokenClaims, time.Now().UTC().Add(60*time.Minute))
 		if err != nil {
 			http.Error(w, "token issue error", http.StatusInternalServerError)
 			return
@@ -830,6 +869,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if sess, ok := s.sessions[sessionID]; ok {
 		for i := range sess.ClientSessions {
 			if sess.ClientSessions[i].ClientID == clientID {
+				sess.ClientSessions[i].AdvertisedSub = advertisedSub
 				sess.ClientSessions[i].AccessTokenClaims = issuedAccessClaims
 				sess.ClientSessions[i].RefreshTokenClaims = issuedRefreshClaims
 				if issuedIDTokenClaims != nil {
@@ -878,8 +918,13 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	sub, _ := claims["sub"].(string)
 	out["sub"] = sub
 	if strings.Contains(scope, "profile") {
-		out["name"] = capitalize(sub)
-		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sub))
+		username, _ := claims["preferred_username"].(string)
+		if username == "" {
+			username = sub // fallback for tokens predating preferred_username
+		}
+		out["name"] = capitalize(username)
+		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(username))
+		out["preferred_username"] = username
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -906,11 +951,11 @@ func (s *server) endsession(w http.ResponseWriter, r *http.Request) {
 	sub, _ := claims["sub"].(string)
 
 	s.mu.Lock()
-	existingSessionID := s.getSessionBySubjectLocked(sub)
+	existingSessionID := s.getSessionByAdvertisedSubLocked(sub)
 	if existingSessionID != "" {
 		sess := s.sessions[existingSessionID]
 		s.mu.Unlock()
-		renderTemplate(w, s.templates["endsession"], endsessionData{SessionID: existingSessionID, Subject: sess.Subject, RedirURL: redirURL})
+		renderTemplate(w, s.templates["endsession"], endsessionData{SessionID: existingSessionID, Subject: sess.Username, RedirURL: redirURL})
 		return
 	}
 	s.mu.Unlock()
@@ -973,7 +1018,7 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"jwks_uri":                              s.externalURL + "/.well-known/jwks.json",
 		"end_session_endpoint":                  s.externalURL + "/endsession",
 		"response_types_supported":              []string{"code"},
-		"subject_types_supported":               []string{"public"},
+		"subject_types_supported":               []string{s.subjectType},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"scopes_supported":                      []string{"openid", "profile", "offline_access"},
@@ -1059,10 +1104,24 @@ func buildURL(base string, params map[string]string) string {
 	return u.String()
 }
 
-func (s *server) getSessionBySubjectLocked(sub string) string {
+// getSessionBySubLocked finds a session by its internal Sub (not the advertised pairwise sub).
+func (s *server) getSessionBySubLocked(sub string) (session, bool) {
+	for _, sess := range s.sessions {
+		if sess.Sub == sub {
+			return sess, true
+		}
+	}
+	return session{}, false
+}
+
+// getSessionByAdvertisedSubLocked finds a session by the AdvertisedSub stored in any of its
+// clientSessions. Used when matching an id_token_hint's sub claim back to an SSO session.
+func (s *server) getSessionByAdvertisedSubLocked(advertisedSub string) string {
 	for sessionID, sess := range s.sessions {
-		if sess.Subject == sub {
-			return sessionID
+		for _, cs := range sess.ClientSessions {
+			if cs.AdvertisedSub == advertisedSub {
+				return sessionID
+			}
 		}
 	}
 	return ""
@@ -1075,6 +1134,16 @@ func getClientSessionByID(sess session, clientID string) *clientSession {
 		}
 	}
 	return nil
+}
+
+func upsertClientSession(sessions []clientSession, cs clientSession) []clientSession {
+	for i := range sessions {
+		if sessions[i].ClientID == cs.ClientID {
+			sessions[i] = cs
+			return sessions
+		}
+	}
+	return append(sessions, cs)
 }
 
 func updateClientSessionPKCE(sess session, clientID, codeChallenge, codeChallengeMethod string) session {
@@ -1191,11 +1260,17 @@ func parseClaimsJSON(raw string) (map[string]any, error) {
 	return claims, nil
 }
 
-func defaultAccessTokenClaims(_ string, scope string) map[string]any {
-	return map[string]any{
+func defaultAccessTokenClaims(username, scope, externalURL string) map[string]any {
+	claims := map[string]any{
 		"token_use": "access",
 		"scope":     scope,
 	}
+	if strings.Contains(scope, "profile") {
+		claims["preferred_username"] = username
+		claims["name"] = capitalize(username)
+		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(username))
+	}
+	return claims
 }
 
 func hasScope(scope, target string) bool {
@@ -1207,7 +1282,7 @@ func hasScope(scope, target string) bool {
 	return false
 }
 
-func defaultIDTokenClaims(subject, scope, clientID, nonce, externalURL string) map[string]any {
+func defaultIDTokenClaims(username, scope, clientID, nonce, externalURL string) map[string]any {
 	claims := map[string]any{
 		"azp": clientID,
 	}
@@ -1215,9 +1290,9 @@ func defaultIDTokenClaims(subject, scope, clientID, nonce, externalURL string) m
 		claims["nonce"] = nonce
 	}
 	if strings.Contains(scope, "profile") {
-		claims["name"] = capitalize(subject)
-		claims["preferred_username"] = capitalize(subject)
-		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(subject))
+		claims["name"] = capitalize(username)
+		claims["preferred_username"] = username
+		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(username))
 	}
 	return claims
 }
@@ -1304,4 +1379,26 @@ func capitalize(s string) string {
 		return s
 	}
 	return strings.ToUpper(s[:1]) + strings.ToLower(s[1:])
+}
+
+// sectorIdentifier returns the host component of redirectURI, or clientID as a fallback.
+func sectorIdentifier(redirectURI, clientID string) string {
+	if u, err := url.Parse(redirectURI); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return clientID
+}
+
+// computeAdvertisedSub returns the sub value to advertise to a specific RP.
+// In public mode it returns the internal sub unchanged; in pairwise mode it
+// returns HMAC-SHA256(pairwiseSalt, sectorID || 0x00 || sub) encoded as base64url.
+func (s *server) computeAdvertisedSub(sub, sectorID string) string {
+	if s.subjectType != "pairwise" {
+		return sub
+	}
+	mac := hmac.New(sha256.New, s.pairwiseSalt)
+	mac.Write([]byte(sectorID))
+	mac.Write([]byte{0x00})
+	mac.Write([]byte(sub))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

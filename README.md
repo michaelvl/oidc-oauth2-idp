@@ -42,6 +42,14 @@ Environment variables:
   accepted for access tokens.
 - `ACCESS_TOKEN_LIFETIME` (default: `1200`): access token lifetime in seconds.
 - `REFRESH_TOKEN_LIFETIME` (default: `3600`): refresh token lifetime in seconds.
+- `SUBJECT_TYPE` (default: `public`): subject identifier type — `public` or
+  `pairwise`. In public mode every RP receives the same `sub` for a given user.
+  In pairwise mode each RP receives a different, opaque `sub` derived from the
+  RP's sector identifier (the host component of its `redirect_uri`) so that RPs
+  cannot correlate users across sites.
+- `PAIRWISE_SALT` (required when `SUBJECT_TYPE=pairwise`): hex-encoded HMAC
+  secret (minimum 16 bytes / 32 hex characters) used to derive pairwise subject
+  identifiers. Example: `PAIRWISE_SALT=$(openssl rand -hex 32)`.
 - `TEMPLATES_DIR` (default: `$KO_DATA_PATH/templates`): path to HTML/CSS
   template assets.
 - `KO_DATA_PATH` (default: `idp-auth-server/kodata`): base asset path used to

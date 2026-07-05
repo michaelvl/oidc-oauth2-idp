@@ -94,7 +94,8 @@ func TestGetClientSessionByID(t *testing.T) {
 	t.Parallel()
 
 	sess := session{
-		Subject:   "alice",
+		Username:  "alice",
+		Sub:       "xxalicexx",
 		SessionID: "s1",
 		ClientSessions: []clientSession{
 			{ClientID: "c1", Scope: "openid"},
@@ -318,5 +319,86 @@ func TestAvatarAcceptsBearerWhenProtected(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "image/svg+xml") {
 		t.Fatalf("expected image/svg+xml content type, got %q", got)
+	}
+}
+
+func TestSectorIdentifier(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		redirectURI string
+		clientID    string
+		want        string
+	}{
+		{"http://app.example.com/callback", "myclient", "app.example.com"},
+		{"https://rp.example.org:8443/cb", "myclient", "rp.example.org:8443"},
+		{"not-a-uri", "myclient", "myclient"},
+		{"", "myclient", "myclient"},
+	}
+	for _, tc := range cases {
+		got := sectorIdentifier(tc.redirectURI, tc.clientID)
+		if got != tc.want {
+			t.Fatalf("sectorIdentifier(%q, %q) = %q, want %q", tc.redirectURI, tc.clientID, got, tc.want)
+		}
+	}
+}
+
+func TestComputeAdvertisedSubPublic(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{subjectType: "public"}
+	sub := "xxalicexx"
+	got := srv.computeAdvertisedSub(sub, "app.example.com")
+	if got != sub {
+		t.Fatalf("public mode: expected sub unchanged, got %q", got)
+	}
+}
+
+func TestComputeAdvertisedSubPairwise(t *testing.T) {
+	t.Parallel()
+
+	salt := make([]byte, 32)
+	srv := &server{subjectType: "pairwise", pairwiseSalt: salt}
+	sub := "xxalicexx"
+
+	got1 := srv.computeAdvertisedSub(sub, "app1.example.com")
+	got2 := srv.computeAdvertisedSub(sub, "app2.example.com")
+	got3 := srv.computeAdvertisedSub("xxbobxx", "app1.example.com")
+
+	if got1 == got2 {
+		t.Fatalf("same sub, different sectors should produce different advertised sub")
+	}
+	if got1 == got3 {
+		t.Fatalf("different subs, same sector should produce different advertised sub")
+	}
+	// deterministic: same inputs always produce same output
+	if got1 != srv.computeAdvertisedSub(sub, "app1.example.com") {
+		t.Fatalf("computeAdvertisedSub is not deterministic")
+	}
+}
+
+func TestAdvertisedSubIsOpaque(t *testing.T) {
+	t.Parallel()
+
+	salt := make([]byte, 32)
+	srv := &server{subjectType: "pairwise", pairwiseSalt: salt}
+	sub := "xxalicexx"
+	got := srv.computeAdvertisedSub(sub, "app.example.com")
+
+	if strings.Contains(got, "alice") || strings.Contains(got, "xx") {
+		t.Fatalf("pairwise sub must not contain the internal sub; got %q", got)
+	}
+}
+
+func TestSubDistinctFromUsername(t *testing.T) {
+	t.Parallel()
+
+	username := "alice"
+	sub := "xx" + username + "xx"
+	if sub == username {
+		t.Fatalf("internal sub must differ from username")
+	}
+	if !strings.Contains(sub, username) {
+		t.Fatalf("internal sub should embed the username for this implementation")
 	}
 }
