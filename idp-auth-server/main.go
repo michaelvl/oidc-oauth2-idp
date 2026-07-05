@@ -859,7 +859,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var issuedIDTokenClaims map[string]any
-	if strings.Contains(scope, "openid") {
+	if hasScope(scope, "openid") {
 		var idToken string
 		idToken, issuedIDTokenClaims, err = s.issueToken(advertisedSub, []string{clientID}, idTokenClaims, time.Now().UTC().Add(60*time.Minute))
 		if err != nil {
@@ -929,7 +929,7 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
 	sub, _ := claims["sub"].(string)
 	out["sub"] = sub
-	if sess.Username != "" && strings.Contains(scope, "profile") {
+	if sess.Username != "" && hasScope(scope, "profile") {
 		out["preferred_username"] = sess.Username
 		out["name"] = capitalize(sess.Username)
 		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sess.Username))
@@ -1308,7 +1308,7 @@ func defaultIDTokenClaims(username, scope, clientID, nonce, externalURL string) 
 	if nonce != "" {
 		claims["nonce"] = nonce
 	}
-	if strings.Contains(scope, "profile") {
+	if hasScope(scope, "profile") {
 		claims["name"] = capitalize(username)
 		claims["preferred_username"] = username
 		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(username))
