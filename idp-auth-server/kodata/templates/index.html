@@ -16,27 +16,29 @@
         {{range $session := .Sessions}}
         <section class="session">
           <img class="session-avatar" src="{{$session.AvatarURL}}" alt="User avatar" width="36" height="36">
-          <p class="meta"><strong>{{$session.SessionID}}</strong></p>
+          <p class="meta"><strong>{{$session.CookieID}}</strong></p>
           <p class="meta">username: {{$session.Username}}</p>
           <p class="meta">sub (internal): {{$session.Sub}}</p>
           {{range $clientSession := $session.ClientSessions}}
-          <p class="meta">client_id: {{$clientSession.ClientID}}</p>
-          {{if $clientSession.AdvertisedSub}}<p class="meta">sub (advertised): {{$clientSession.AdvertisedSub}}</p>{{end}}
-          <p class="meta">scope: {{$clientSession.Scope}}</p>
-          {{if $clientSession.IDTokenIssued}}
-          <p class="meta">ID token claims:</p>
-          <pre class="claims-view">{{$clientSession.IDTokenClaimsJSON}}</pre>
-          <p class="meta">ID token expiry: {{$clientSession.IDTokenExpiry}}</p>
-          {{end}}
-          <p class="meta">access token claims:</p>
-          <pre class="claims-view">{{$clientSession.AccessTokenClaimsJSON}}</pre>
-          <p class="meta">access token expiry: {{$clientSession.AccessTokenExpiry}}</p>
-          {{if $clientSession.RefreshTokenIssued}}
-          <p class="meta">refresh token expiry: {{$clientSession.RefreshTokenExpiry}}</p>
-          {{end}}
+          <div class="client-session">
+            <p class="meta client-session-header">{{$clientSession.ClientID}}</p>
+            {{if $clientSession.AdvertisedSub}}<p class="meta">sub (advertised): {{$clientSession.AdvertisedSub}}</p>{{end}}
+            <p class="meta">scope: {{$clientSession.Scope}}</p>
+            {{if $clientSession.IDTokenIssued}}
+            <p class="meta">ID token claims:</p>
+            <pre class="claims-view">{{$clientSession.IDTokenClaimsJSON}}</pre>
+            <p class="meta">ID token expiry: {{$clientSession.IDTokenExpiry}}</p>
+            {{end}}
+            <p class="meta">access token claims:</p>
+            <pre class="claims-view">{{$clientSession.AccessTokenClaimsJSON}}</pre>
+            <p class="meta">access token expiry: {{$clientSession.AccessTokenExpiry}}</p>
+            {{if $clientSession.RefreshTokenIssued}}
+            <p class="meta">refresh token expiry: {{$clientSession.RefreshTokenExpiry}}</p>
+            {{end}}
+          </div>
           {{end}}
           <form action="/logout" method="post">
-            <input type="hidden" name="sessionid" value="{{$session.SessionID}}">
+            <input type="hidden" name="cookieid" value="{{$session.CookieID}}">
             <button class="btn btn-danger" type="submit">Sign out</button>
           </form>
         </section>

@@ -55,6 +55,10 @@ body {
   line-height: 1.2;
 }
 
+.ascii-subsep {
+  color: var(--text-muted);
+}
+
 .ascii-row {
   display: flex;
   align-items: flex-start;

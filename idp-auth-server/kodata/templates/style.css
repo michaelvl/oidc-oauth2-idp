@@ -196,3 +196,15 @@ input[type="password"]:focus,
   padding-bottom: 0;
   border-bottom: 0;
 }
+
+.client-session {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid #d0d7de;
+  background: #f6f8fa;
+}
+
+.client-session-header {
+  font-weight: 600;
+  color: #57606a;
+}

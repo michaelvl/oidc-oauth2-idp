@@ -101,7 +101,7 @@ type indexData struct {
 }
 
 type sessionView struct {
-	SessionID      string
+	CookieID       string
 	Username       string
 	Sub            string
 	AvatarURL      string
@@ -337,7 +337,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		views = append(views, sessionView{
-			SessionID:      cookieID,
+			CookieID:       cookieID,
 			Username:       sess.Username,
 			Sub:            sess.Sub,
 			AvatarURL:      s.avatarURL(sess.Username),
@@ -404,7 +404,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm()
-	cookieID := r.Form.Get("sessionid")
+	cookieID := r.Form.Get("cookieid")
 	s.log().Info("logout", "cookie_id", cookieID)
 
 	s.mu.Lock()
