@@ -214,7 +214,7 @@ func newServer(logger *slog.Logger) (*server, error) {
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
-	subjectType := getenvDefault("SUBJECT_TYPE", "pairwise")
+	subjectType := getenvDefault("SUBJECT_TYPE", "public")
 	var pairwiseSalt []byte
 	if subjectType == "pairwise" {
 		saltHex := getenvDefault("PAIRWISE_SALT", "")

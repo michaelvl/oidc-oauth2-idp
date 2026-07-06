@@ -42,7 +42,7 @@ Environment variables:
   accepted for access tokens.
 - `ACCESS_TOKEN_LIFETIME` (default: `1200`): access token lifetime in seconds.
 - `REFRESH_TOKEN_LIFETIME` (default: `3600`): refresh token lifetime in seconds.
-- `SUBJECT_TYPE` (default: `pairwise`): subject identifier type — `public` or
+- `SUBJECT_TYPE` (default: `public`): subject identifier type — `public` or
   `pairwise`. In public mode every RP receives the same `sub` for a given user.
   In pairwise mode each RP receives a different, opaque `sub` derived from the
   RP's sector identifier (the host component of its `redirect_uri`) so that RPs
