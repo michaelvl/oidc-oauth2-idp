@@ -14,7 +14,7 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			startedAt := time.Now()
-			rw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			rw := &statusWriter{responseWriter: responseWriter{ResponseWriter: w}, status: http.StatusOK}
 
 			next.ServeHTTP(rw, r)
 
@@ -30,7 +30,7 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 }
 
 type statusWriter struct {
-	http.ResponseWriter
+	responseWriter
 	status int
 }
 
