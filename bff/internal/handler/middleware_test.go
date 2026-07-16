@@ -197,3 +197,79 @@ func TestTokenForwarder_ReturnsUnauthorizedWithoutSession(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
 }
+
+func newAuthGuardHandler(bypassPaths []string) *Handler {
+	return New(Dependencies{
+		Logger:          slog.New(slog.NewTextHandler(&strings.Builder{}, nil)),
+		Sessions:        session.NewManager(session.NewMemoryStore(), "session", "01234567890123456789012345678901", true),
+		AuthCodeURL:     func(_, _ string) string { return "" },
+		ExchangeCode:    func(context.Context, string, string) (*oauth2.Token, error) { return nil, nil },
+		VerifyIDToken:   func(context.Context, string) (session.UserClaims, error) { return session.UserClaims{}, nil },
+		InsecureCookies: true,
+		APIPathPrefix:   "/api",
+		AuthBypassPaths: bypassPaths,
+	})
+}
+
+func TestAuthGuard_DefaultBypassPaths_AllowPublicRoutes(t *testing.T) {
+	defaults := []string{"/auth/", "/assets/", "/login", "/healthz", "/favicon.ico"}
+	h := newAuthGuardHandler(defaults)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	wrapped := h.AuthGuard(next)
+
+	for _, path := range []string{"/auth/login", "/assets/logo.png", "/login", "/healthz", "/favicon.ico"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path %q: expected 200 (public), got %d", path, rec.Code)
+		}
+	}
+}
+
+func TestAuthGuard_DefaultBypassPaths_ProtectsSPARoutes(t *testing.T) {
+	defaults := []string{"/auth/", "/assets/", "/login", "/healthz", "/favicon.ico"}
+	h := newAuthGuardHandler(defaults)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	wrapped := h.AuthGuard(next)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect (303) for unauthenticated SPA route, got %d", rec.Code)
+	}
+}
+
+func TestAuthGuard_WildcardBypassPath_AllowsUnauthenticatedStaticAssets(t *testing.T) {
+	// "/" is the normalized form of "/*" (trailing * stripped by parseAuthBypassPaths)
+	h := newAuthGuardHandler([]string{"/"})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	wrapped := h.AuthGuard(next)
+
+	for _, path := range []string{"/", "/dashboard", "/some/deep/path"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path %q: expected 200 with bypass, got %d", path, rec.Code)
+		}
+	}
+}
+
+func TestAuthGuard_APIPathAlwaysBypassed(t *testing.T) {
+	// Even with no bypass paths configured, the API prefix is always let through
+	// by AuthGuard (TokenForwarder handles API auth independently).
+	h := newAuthGuardHandler(nil)
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	wrapped := h.AuthGuard(next)
+
+	for _, path := range []string{"/api/v1/foo", "/api"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		wrapped.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("path %q: expected AuthGuard to pass through API path, got %d", path, rec.Code)
+		}
+	}
+}

@@ -30,9 +30,10 @@ type Dependencies struct {
 	RefreshTokens         func(ctx context.Context, refreshToken string) (*oauth2.Token, error)
 	EndSessionEndpoint    string
 	AvatarHTTPClient      *http.Client
-	ContentSecurityPolicy string
-	InsecureCookies       bool
-	APIPathPrefix         string
+	ContentSecurityPolicy  string
+	InsecureCookies        bool
+	APIPathPrefix          string
+	AuthBypassPaths        []string
 }
 
 type Handler struct {

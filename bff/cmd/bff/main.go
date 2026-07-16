@@ -75,6 +75,7 @@ func run(logger *slog.Logger) error {
 		ContentSecurityPolicy: bffCfg.ContentSecurityPolicy,
 		InsecureCookies:       bffCfg.InsecureCookies,
 		APIPathPrefix:         bffCfg.APIPathPrefix,
+		AuthBypassPaths:       bffCfg.AuthBypassPaths,
 	})
 
 	apiProxy, err := handler.NewAPIProxy(logger, sessionManager, bffCfg.APIBaseURL, bffCfg.APIPathPrefix, bffCfg.APIUpstreamPathPrefix)

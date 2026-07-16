@@ -143,3 +143,54 @@ func TestLoadBFF_APIUpstreamPathPrefix_Override(t *testing.T) {
 		t.Fatalf("expected APIUpstreamPathPrefix /v2, got %q", cfg.APIUpstreamPathPrefix)
 	}
 }
+
+func TestLoadBFF_AuthBypassPaths_DefaultsToCurrentHardcodedList(t *testing.T) {
+	seedRequiredBFFEnv(t)
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	want := []string{"/auth/", "/assets/", "/login", "/healthz", "/favicon.ico"}
+	if len(cfg.AuthBypassPaths) != len(want) {
+		t.Fatalf("expected %d bypass paths, got %d: %v", len(want), len(cfg.AuthBypassPaths), cfg.AuthBypassPaths)
+	}
+	for i, p := range want {
+		if cfg.AuthBypassPaths[i] != p {
+			t.Fatalf("expected AuthBypassPaths[%d] = %q, got %q", i, p, cfg.AuthBypassPaths[i])
+		}
+	}
+}
+
+func TestLoadBFF_AuthBypassPaths_Override(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("AUTH_BYPASS_PATHS", "/auth/ /assets/ /public/")
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	want := []string{"/auth/", "/assets/", "/public/"}
+	if len(cfg.AuthBypassPaths) != len(want) {
+		t.Fatalf("expected %d bypass paths, got %d: %v", len(want), len(cfg.AuthBypassPaths), cfg.AuthBypassPaths)
+	}
+	for i, p := range want {
+		if cfg.AuthBypassPaths[i] != p {
+			t.Fatalf("expected AuthBypassPaths[%d] = %q, got %q", i, p, cfg.AuthBypassPaths[i])
+		}
+	}
+}
+
+func TestLoadBFF_AuthBypassPaths_WildcardNormalizedToSlash(t *testing.T) {
+	seedRequiredBFFEnv(t)
+	t.Setenv("AUTH_BYPASS_PATHS", "/*")
+
+	cfg, err := LoadBFF()
+	if err != nil {
+		t.Fatalf("expected bff config to load, got: %v", err)
+	}
+	// "/*" is normalized to "/" so HasPrefix matches all paths
+	if len(cfg.AuthBypassPaths) != 1 || cfg.AuthBypassPaths[0] != "/" {
+		t.Fatalf("expected AuthBypassPaths [/], got %v", cfg.AuthBypassPaths)
+	}
+}

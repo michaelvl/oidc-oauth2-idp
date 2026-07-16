@@ -26,15 +26,20 @@ func (h *Handler) SecurityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-// AuthGuard enforces session authentication for SPA route access.
-// It runs in the global BFF middleware stack and redirects unauthenticated
-// browser navigations to /login, while allowing auth, api, assets, health,
-// and other explicitly public paths to pass through unchanged.
+// AuthGuard enforces session authentication for all paths not covered by
+// AuthBypassPaths or the API prefix (which TokenForwarder guards independently).
+// Unauthenticated requests are redirected to /login.
 func (h *Handler) AuthGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, h.deps.APIPathPrefix+"/") || r.URL.Path == h.deps.APIPathPrefix || strings.HasPrefix(r.URL.Path, "/assets/") || r.URL.Path == "/login" || r.URL.Path == "/healthz" || r.URL.Path == "/favicon.ico" {
+		if strings.HasPrefix(r.URL.Path, h.deps.APIPathPrefix+"/") || r.URL.Path == h.deps.APIPathPrefix {
 			next.ServeHTTP(w, r)
 			return
+		}
+		for _, prefix := range h.deps.AuthBypassPaths {
+			if strings.HasPrefix(r.URL.Path, prefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
 		}
 
 		_, ok, err := h.deps.Sessions.Get(r)

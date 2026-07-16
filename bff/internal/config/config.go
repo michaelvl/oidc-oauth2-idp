@@ -24,6 +24,7 @@ type BFFConfig struct {
 	StaticAssetsBaseURL    string
 	ContentSecurityPolicy  string
 	InsecureCookies        bool
+	AuthBypassPaths        []string
 }
 
 const DefaultContentSecurityPolicy = "default-src 'self'; script-src 'self'"
@@ -60,6 +61,7 @@ func LoadBFF() (BFFConfig, error) {
 		StaticAssetsBaseURL:   strings.TrimSpace(os.Getenv("STATIC_ASSETS_BASE_URL")),
 		ContentSecurityPolicy: defaultString("CONTENT_SECURITY_POLICY", DefaultContentSecurityPolicy),
 		InsecureCookies:       insecureCookies,
+		AuthBypassPaths:       parseAuthBypassPaths(os.Getenv("AUTH_BYPASS_PATHS")),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -155,6 +157,20 @@ func normalizePathPrefix(p string) string {
 		p = "/" + p
 	}
 	return p
+}
+
+func parseAuthBypassPaths(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{"/auth/", "/assets/", "/login", "/healthz", "/favicon.ico"}
+	}
+	var paths []string
+	for _, p := range strings.Fields(raw) {
+		if p != "" {
+			paths = append(paths, strings.TrimSuffix(p, "*"))
+		}
+	}
+	return paths
 }
 
 func parseBoolDefault(key string, fallback bool) (bool, error) {

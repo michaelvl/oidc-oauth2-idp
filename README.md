@@ -94,7 +94,8 @@ Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [int
 
 #### Request flows and path handling
 
-- Public paths (no session required):
+- Public paths (no session required): controlled by `AUTH_BYPASS_PATHS` (see
+  environment variables). The default set is:
   - `/assets/*` and `/favicon.ico`. These are forwarded to the application
     backend. Backend is configured with `STATIC_ASSETS_BASE_URL`
   - `/login` - this is forwarded to the application backend and is intended for
@@ -117,8 +118,9 @@ Client ──► BFF ──┬──► ├─ /auth/logout    ├──► [int
 
   - `GET /auth/avatar` proxies the user's avatar from the upstream IdP using the
     current session access token or `404` if no picture claim exists.
-- Protected SPA navigation: all other non-API routes (including `/`) require a
-  valid BFF session; unauthenticated requests are redirected to `GET /login`.
+- Protected SPA navigation: all routes not matched by `AUTH_BYPASS_PATHS` or the
+  API prefix require a valid BFF session; unauthenticated requests are redirected
+  to `GET /login`. Set `AUTH_BYPASS_PATHS=/*` to make static assets fully public.
 - API proxy paths: `API_PATH_PREFIX` and `API_PATH_PREFIX/*` are reverse-proxied
   to `API_BASE_URL` with `Authorization: Bearer <access_token>` injected from
   the server-side session. The prefix defaults to `/api` and is configurable via
@@ -228,7 +230,7 @@ Browser (SPA)
 | 1 | `RequestLogger`   | Logs method, path, status code, duration, and remote address for every request                                                                                                               |
 | 2 | `Recovery`        | Catches panics and returns a 500 JSON error                                                                                                                                                  |
 | 3 | `SecurityHeaders` | Adds HSTS, `X-Content-Type-Options`, `X-Frame-Options`, CSP, and `Referrer-Policy` to every response                                                                                         |
-| 4 | `AuthGuard`       | For SPA routes: redirects unauthenticated requests to `/login`. Defers auth for `/api/*` to `TokenForwarder`, and passes `/auth/`, `/assets/`, `/healthz` through without any session check  |
+| 4 | `AuthGuard`       | Redirects unauthenticated requests to `/login` for any path not in `AUTH_BYPASS_PATHS` and not the API prefix. The API prefix is always passed through here; `TokenForwarder` handles API auth independently with a 401. |
 | 5 | `CSRFMiddleware`  | Validates `X-CSRF-Token` on non-GET/HEAD/OPTIONS requests to `/api/*` and `/auth/logout`; rejects with 403 on mismatch                                                                       |
 | 6 | `TokenForwarder`  | For `/api/*`: reads the session, proactively refreshes the token if near expiry, injects `Authorization: Bearer <token>` into the upstream request, and returns 401 if no valid token exists |
 
@@ -272,6 +274,11 @@ Browser (SPA)
     backend in that case.
 - `REDIS_URL` (default: empty): Redis connection URL (for example
   `redis://127.0.0.1:6379`). Required when `SESSION_STORAGE_TYPE=redis`.
+- `AUTH_BYPASS_PATHS` (default: `/auth/ /assets/ /login /healthz /favicon.ico`):
+  space-separated list of path prefixes that `AuthGuard` lets through without a
+  session check. A trailing `*` is stripped (e.g. `/*` is treated as `/`), so
+  `/*` makes all non-API paths public — useful when the SPA/static assets should
+  be accessible without login while the API remains protected.
 - `INSECURE_COOKIES` (default: `false`): if `true`, disables `Secure` on cookies
   for local HTTP development.
 - `CONTENT_SECURITY_POLICY` (default: `default-src 'self'; script-src 'self'`):
