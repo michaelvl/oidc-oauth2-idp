@@ -534,7 +534,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	reqID := r.Form.Get("reqid")
 	username := r.Form.Get("username")
-	sub := "xx" + username + "xx" // internal subject: stable, distinct from username
+	sub := "internal|" + username // internal subject: stable, distinct from username
 	password := r.Form.Get("password")
 
 	if password != "valid" {
@@ -549,12 +549,12 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	s.authContext[reqID] = ctx
 	s.mu.Unlock()
 
-	idTokenClaimsJSON, err := claimsToPrettyJSON(defaultIDTokenClaims(username, ctx.Scope, ctx.ClientID, ctx.Nonce, s.externalURL))
+	idTokenClaimsJSON, err := claimsToPrettyJSON(s.defaultIDTokenClaims(ctx))
 	if err != nil {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
 	}
-	accessTokenClaimsJSON, err := claimsToPrettyJSON(defaultAccessTokenClaims(ctx.Scope, ""))
+	accessTokenClaimsJSON, err := claimsToPrettyJSON(s.defaultAccessTokenClaims(ctx))
 	if err != nil {
 		http.Error(w, "claims serialization error", http.StatusInternalServerError)
 		return
@@ -712,10 +712,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		cookieID        string
 		clientSessionID string
 		nonce           string
-		idTokenClaims   map[string]any
-		accessClaims    map[string]any
-		accessLifetime  int
-		refreshLifetime int
+		idTokenClaims map[string]any
+		accessClaims  map[string]any
 	)
 
 	switch grantType {
@@ -781,20 +779,21 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		advertisedSub = s.computeAdvertisedSub(sess.Sub, sectorIdentifier(clientSess.RedirectURI, clientID))
+		advertisedSub = clientSess.AdvertisedSub
 		scope = clientSess.Scope
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
-			idTokenClaims = defaultIDTokenClaims(username, scope, clientID, nonce, s.externalURL)
+			idTokenClaims = s.defaultIDTokenClaims(authContextEntry{
+				Sub: sess.Sub, Username: username, Scope: scope,
+				ClientID: clientID, Nonce: nonce, RedirectURI: clientSess.RedirectURI,
+			})
 		}
 		clientSessionID = clientSess.SessionID
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
-			accessClaims = defaultAccessTokenClaims(scope, clientSessionID)
+			accessClaims = s.defaultAccessTokenClaims(authContextEntry{Scope: scope})
 		}
 		accessClaims["csid"] = clientSessionID
-		accessLifetime = s.accessTokenLifetime
-		refreshLifetime = s.refreshTokenLifetime
 
 	case "refresh_token":
 		refreshToken := r.Form.Get("refresh_token")
@@ -828,16 +827,17 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		}
 		idTokenClaims = clientSess.IDTokenClaims
 		if idTokenClaims == nil {
-			idTokenClaims = defaultIDTokenClaims(username, scope, clientID, nonce, s.externalURL)
+			idTokenClaims = s.defaultIDTokenClaims(authContextEntry{
+				Sub: sess.Sub, Username: username, Scope: scope,
+				ClientID: clientID, Nonce: nonce, RedirectURI: clientSess.RedirectURI,
+			})
 		}
 		clientSessionID = clientSess.SessionID
 		accessClaims = clientSess.AccessTokenClaims
 		if accessClaims == nil {
-			accessClaims = defaultAccessTokenClaims(scope, clientSessionID)
+			accessClaims = s.defaultAccessTokenClaims(authContextEntry{Scope: scope})
 		}
 		accessClaims["csid"] = clientSessionID
-		accessLifetime = s.accessTokenLifetime
-		refreshLifetime = s.refreshTokenLifetime
 
 	default:
 		s.log().Warn("get-token invalid grant type", "grant_type", grantType)
@@ -847,7 +847,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	s.log().Info("issuing tokens", "grant_type", grantType, "client_id", clientID)
 	accessAud := dedupeStrings(append([]string{s.externalURL + "/userinfo"}, s.extraAudiences...))
-	accessToken, issuedAccessClaims, err := s.issueToken(advertisedSub, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(accessLifetime)*time.Second))
+	accessToken, issuedAccessClaims, err := s.issueToken(advertisedSub, accessAud, accessClaims, time.Now().UTC().Add(time.Duration(s.accessTokenLifetime)*time.Second))
 	if err != nil {
 		http.Error(w, "token issue error", http.StatusInternalServerError)
 		return
@@ -855,7 +855,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 
 	response := map[string]any{
 		"access_token": accessToken,
-		"expires_in":   accessLifetime,
+		"expires_in":   s.accessTokenLifetime,
 		"token_type":   "Bearer",
 	}
 
@@ -863,9 +863,9 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if hasScope(scope, "offline_access") {
 		refreshAud := dedupeStrings([]string{s.externalURL + "/token"})
 		refreshToken, refreshClaims, issueErr := s.issueToken(advertisedSub, refreshAud, map[string]any{
-			"token_use":         "refresh",
-			"csid": clientSessionID,
-		}, time.Now().UTC().Add(time.Duration(refreshLifetime)*time.Second))
+			"token_use": "refresh",
+			"csid":      clientSessionID,
+		}, time.Now().UTC().Add(time.Duration(s.refreshTokenLifetime)*time.Second))
 		if issueErr != nil {
 			http.Error(w, "token issue error", http.StatusInternalServerError)
 			return
@@ -1046,7 +1046,9 @@ func (s *server) issueToken(subject string, audience []string, claims map[string
 	for k, v := range claims {
 		allClaims[k] = v
 	}
-	allClaims["sub"] = subject
+	if _, hasSub := allClaims["sub"]; !hasSub {
+		allClaims["sub"] = subject
+	}
 	allClaims["iss"] = s.externalURL
 	allClaims["aud"] = audience
 	allClaims["iat"] = time.Now().UTC().Unix()
@@ -1310,11 +1312,10 @@ func parseClaimsJSON(raw string) (map[string]any, error) {
 	return claims, nil
 }
 
-func defaultAccessTokenClaims(scope, clientSessionID string) map[string]any {
+func (s *server) defaultAccessTokenClaims(ctx authContextEntry) map[string]any {
 	return map[string]any{
-		"token_use":         "access",
-		"scope":             scope,
-		"csid": clientSessionID,
+		"token_use": "access",
+		"scope":     ctx.Scope,
 	}
 }
 
@@ -1327,17 +1328,18 @@ func hasScope(scope, target string) bool {
 	return false
 }
 
-func defaultIDTokenClaims(username, scope, clientID, nonce, externalURL string) map[string]any {
+func (s *server) defaultIDTokenClaims(ctx authContextEntry) map[string]any {
 	claims := map[string]any{
-		"azp": clientID,
+		"sub": s.computeAdvertisedSub(ctx.Sub, sectorIdentifier(ctx.RedirectURI, ctx.ClientID)),
+		"azp": ctx.ClientID,
 	}
-	if nonce != "" {
-		claims["nonce"] = nonce
+	if ctx.Nonce != "" {
+		claims["nonce"] = ctx.Nonce
 	}
-	if hasScope(scope, "profile") {
-		claims["name"] = capitalize(username)
-		claims["preferred_username"] = username
-		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", externalURL, avatarIndex(username))
+	if hasScope(ctx.Scope, "profile") {
+		claims["name"] = capitalize(ctx.Username)
+		claims["preferred_username"] = ctx.Username
+		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(ctx.Username))
 	}
 	return claims
 }
