@@ -40,6 +40,10 @@ Environment variables:
   (`/avatars/*.svg`) require `Authorization: Bearer <access_token>`.
 - `EXTRA_AUDIENCES` (default: empty): comma-separated additional audiences
   accepted for access tokens.
+- `EMAIL_DOMAIN` (default: `example.com`): domain used to synthesize the `email`
+  claim as `<username>@<EMAIL_DOMAIN>`. The `email` and `email_verified` claims
+  are added to the ID token and `/userinfo` response when the request includes
+  the `email` scope.
 - `ACCESS_TOKEN_LIFETIME` (default: `1200`): access token lifetime in seconds.
 - `REFRESH_TOKEN_LIFETIME` (default: `3600`): refresh token lifetime in seconds.
 - `SUBJECT_TYPE` (default: `public`): subject identifier type — `public` or

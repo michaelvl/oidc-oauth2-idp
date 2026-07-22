@@ -427,3 +427,40 @@ func TestSubDistinctFromUsername(t *testing.T) {
 		t.Fatalf("internal sub should embed the username for this implementation")
 	}
 }
+
+func TestIDTokenEmailClaimWithEmailScope(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{subjectType: "public", emailDomain: "example.com"}
+	claims := srv.defaultIDTokenClaims(authContextEntry{Username: "alice", Scope: "openid email"})
+
+	if claims["email"] != "alice@example.com" {
+		t.Fatalf("expected email alice@example.com, got %v", claims["email"])
+	}
+	if claims["email_verified"] != true {
+		t.Fatalf("expected email_verified true, got %v", claims["email_verified"])
+	}
+}
+
+func TestIDTokenNoEmailClaimWithoutEmailScope(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{subjectType: "public", emailDomain: "example.com"}
+	claims := srv.defaultIDTokenClaims(authContextEntry{Username: "alice", Scope: "openid profile"})
+
+	if _, ok := claims["email"]; ok {
+		t.Fatalf("email claim must be absent without the email scope")
+	}
+	if _, ok := claims["email_verified"]; ok {
+		t.Fatalf("email_verified claim must be absent without the email scope")
+	}
+}
+
+func TestEmailForUsernameHonorsDomain(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{emailDomain: "corp.example.org"}
+	if got := srv.emailForUsername("bob"); got != "bob@corp.example.org" {
+		t.Fatalf("expected bob@corp.example.org, got %q", got)
+	}
+}

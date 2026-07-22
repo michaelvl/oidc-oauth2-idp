@@ -85,6 +85,7 @@ type server struct {
 	externalURL       string
 	protectPictureURL bool
 	extraAudiences    []string
+	emailDomain       string
 
 	accessTokenLifetime  int
 	refreshTokenLifetime int
@@ -211,6 +212,7 @@ func newServer(logger *slog.Logger) (*server, error) {
 	externalURL := getenvDefault("IDP_EXTERNAL_URL", "http://127.0.0.1:5001")
 	protectPictureURL := getenvDefaultBool("PROTECT_PICTURE_URL", false)
 	extraAudiences := getenvCSV("EXTRA_AUDIENCES")
+	emailDomain := getenvDefault("EMAIL_DOMAIN", "example.com")
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
@@ -256,6 +258,7 @@ func newServer(logger *slog.Logger) (*server, error) {
 		externalURL:          externalURL,
 		protectPictureURL:    protectPictureURL,
 		extraAudiences:       extraAudiences,
+		emailDomain:          emailDomain,
 		accessTokenLifetime:  accessLifetime,
 		refreshTokenLifetime: refreshLifetime,
 		subjectType:          subjectType,
@@ -937,6 +940,10 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 		out["name"] = capitalize(sess.Username)
 		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sess.Username))
 	}
+	if sess.Username != "" && hasScope(scope, "email") {
+		out["email"] = s.emailForUsername(sess.Username)
+		out["email_verified"] = true
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
@@ -1032,8 +1039,8 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"subject_types_supported":               []string{s.subjectType},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"scopes_supported":                      []string{"openid", "profile", "offline_access"},
-		"claims_supported":                      []string{"sub", "name", "picture"},
+		"scopes_supported":                      []string{"openid", "profile", "email", "offline_access"},
+		"claims_supported":                      []string{"sub", "name", "picture", "email", "email_verified"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
 	}
 
@@ -1341,7 +1348,17 @@ func (s *server) defaultIDTokenClaims(ctx authContextEntry) map[string]any {
 		claims["preferred_username"] = ctx.Username
 		claims["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(ctx.Username))
 	}
+	if ctx.Username != "" && hasScope(ctx.Scope, "email") {
+		claims["email"] = s.emailForUsername(ctx.Username)
+		claims["email_verified"] = true
+	}
 	return claims
+}
+
+// emailForUsername derives a demo email address from the username. This IdP has no
+// user store, so the address is synthesized as username@EMAIL_DOMAIN.
+func (s *server) emailForUsername(username string) string {
+	return username + "@" + s.emailDomain
 }
 
 func intFromAny(v any, def int) int {
