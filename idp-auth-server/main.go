@@ -1039,6 +1039,7 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"subject_types_supported":               []string{s.subjectType},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":      []string{"S256", "plain"},
 		"scopes_supported":                      []string{"openid", "profile", "email", "offline_access"},
 		"claims_supported":                      []string{"sub", "name", "picture", "email", "email_verified"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
