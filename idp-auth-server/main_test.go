@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -462,5 +463,95 @@ func TestEmailForUsernameHonorsDomain(t *testing.T) {
 	srv := &server{emailDomain: "corp.example.org"}
 	if got := srv.emailForUsername("bob"); got != "bob@corp.example.org" {
 		t.Fatalf("expected bob@corp.example.org, got %q", got)
+	}
+}
+
+func TestAuthorizationResponseCarriesIssuer(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		codeMeta:    map[string]codeMetadataEntry{},
+	}
+	sess := session{
+		CookieID: "cookie-1",
+		ClientSessions: []clientSession{{
+			ClientID:    "client-1",
+			RedirectURI: "http://localhost:8080/callback",
+		}},
+	}
+
+	rec := httptest.NewRecorder()
+	srv.issueCodeAndRedirect(rec, httptest.NewRequest(http.MethodGet, "/authorize", nil), sess, "client-1", "state-1", "nonce-1")
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if got := loc.Query().Get("iss"); got != srv.externalURL {
+		t.Fatalf("expected iss %q, got %q", srv.externalURL, got)
+	}
+	if loc.Query().Get("code") == "" {
+		t.Fatalf("expected a code in the authorization response")
+	}
+}
+
+func TestAuthorizationErrorResponseCarriesIssuer(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		sessions:    map[string]session{},
+		authContext: map[string]authContextEntry{},
+	}
+
+	form := url.Values{
+		"client_id":     {"client-1"},
+		"redirect_uri":  {"http://localhost:8080/callback"},
+		"state":         {"state-1"},
+		"prompt":        {"none"},
+		"id_token_hint": {"not-a-jwt"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/authorize", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	srv.authorize(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if got := loc.Query().Get("error"); got != "login_required" {
+		t.Fatalf("expected error login_required, got %q", got)
+	}
+	if got := loc.Query().Get("iss"); got != srv.externalURL {
+		t.Fatalf("expected iss %q, got %q", srv.externalURL, got)
+	}
+}
+
+func TestDiscoveryAdvertisesIssParameterSupport(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{externalURL: "http://127.0.0.1:5001", subjectType: "public"}
+
+	rec := httptest.NewRecorder()
+	srv.openidConfiguration(rec, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &config); err != nil {
+		t.Fatalf("decode discovery document: %v", err)
+	}
+	if config["authorization_response_iss_parameter_supported"] != true {
+		t.Fatalf("expected authorization_response_iss_parameter_supported true, got %v", config["authorization_response_iss_parameter_supported"])
 	}
 }

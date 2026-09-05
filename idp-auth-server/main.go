@@ -480,7 +480,7 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		idTokenClaims, err := s.decodeJWT(idTokenHint, s.publicKey)
 		if err != nil {
 			s.log().Warn("failed to decode id_token_hint", "error", err.Error())
-			redirURL := buildURL(redirectURI, map[string]string{"error": "login_required", "state": state})
+			redirURL := buildURL(redirectURI, map[string]string{"error": "login_required", "state": state, "iss": s.externalURL})
 			http.Redirect(w, r, redirURL, http.StatusSeeOther)
 			return
 		}
@@ -679,7 +679,8 @@ func (s *server) issueCodeAndRedirect(w http.ResponseWriter, r *http.Request, se
 		return
 	}
 
-	redirURL := buildURL(clientSess.RedirectURI, map[string]string{"code": code, "state": state})
+	// RFC 9207: the issuer identifier lets clients detect mix-up attacks.
+	redirURL := buildURL(clientSess.RedirectURI, map[string]string{"code": code, "state": state, "iss": s.externalURL})
 	s.log().Debug("redirecting to callback", "redirect_url", redirURL)
 
 	http.SetCookie(w, &http.Cookie{
@@ -715,8 +716,8 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		cookieID        string
 		clientSessionID string
 		nonce           string
-		idTokenClaims map[string]any
-		accessClaims  map[string]any
+		idTokenClaims   map[string]any
+		accessClaims    map[string]any
 	)
 
 	switch grantType {
@@ -1029,20 +1030,21 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config := map[string]any{
-		"issuer":                                s.externalURL,
-		"authorization_endpoint":                s.externalURL + "/authorize",
-		"token_endpoint":                        s.externalURL + "/token",
-		"userinfo_endpoint":                     s.externalURL + "/userinfo",
-		"jwks_uri":                              s.externalURL + "/.well-known/jwks.json",
-		"end_session_endpoint":                  s.externalURL + "/endsession",
-		"response_types_supported":              []string{"code"},
-		"subject_types_supported":               []string{s.subjectType},
-		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":      []string{"S256", "plain"},
-		"scopes_supported":                      []string{"openid", "profile", "email", "offline_access"},
-		"claims_supported":                      []string{"sub", "name", "picture", "email", "email_verified"},
-		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
+		"issuer":                                         s.externalURL,
+		"authorization_endpoint":                         s.externalURL + "/authorize",
+		"token_endpoint":                                 s.externalURL + "/token",
+		"userinfo_endpoint":                              s.externalURL + "/userinfo",
+		"jwks_uri":                                       s.externalURL + "/.well-known/jwks.json",
+		"end_session_endpoint":                           s.externalURL + "/endsession",
+		"response_types_supported":                       []string{"code"},
+		"subject_types_supported":                        []string{s.subjectType},
+		"id_token_signing_alg_values_supported":          []string{"RS256"},
+		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":               []string{"S256", "plain"},
+		"scopes_supported":                               []string{"openid", "profile", "email", "offline_access"},
+		"claims_supported":                               []string{"sub", "name", "picture", "email", "email_verified"},
+		"token_endpoint_auth_methods_supported":          []string{"client_secret_basic"},
+		"authorization_response_iss_parameter_supported": true,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
