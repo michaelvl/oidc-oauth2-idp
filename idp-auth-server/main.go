@@ -476,7 +476,10 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 
 	s.log().Debug("authorize without session cookie")
 	if prompt == "none" {
-		idTokenHint := r.PostFormValue("id_token_hint")
+		// r.Form covers both the query string and the POST body; silent-auth
+		// requests from a hidden iframe are GETs carrying the hint as a query
+		// parameter.
+		idTokenHint := r.Form.Get("id_token_hint")
 		idTokenClaims, err := s.decodeJWT(idTokenHint, s.publicKey)
 		if err != nil {
 			s.log().Warn("failed to decode id_token_hint", "error", err.Error())
@@ -507,9 +510,8 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 
 		s.log().Info("no existing session found for subject")
-		w.Header().Set("Content-Type", "application/x-www-form-urlencoded")
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte("error=login_required"))
+		redirURL := buildURL(redirectURI, map[string]string{"error": "login_required", "state": state, "iss": s.externalURL})
+		http.Redirect(w, r, redirURL, http.StatusSeeOther)
 		return
 	}
 

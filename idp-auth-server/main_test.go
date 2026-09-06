@@ -555,3 +555,116 @@ func TestDiscoveryAdvertisesIssParameterSupport(t *testing.T) {
 		t.Fatalf("expected authorization_response_iss_parameter_supported true, got %v", config["authorization_response_iss_parameter_supported"])
 	}
 }
+
+func TestPromptNoneAcceptsIDTokenHintFromQueryString(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		subjectType: "public",
+		sessions:    map[string]session{},
+		codeMeta:    map[string]codeMetadataEntry{},
+		authContext: map[string]authContextEntry{},
+		privateKey:  key,
+		publicKey:   &key.PublicKey,
+	}
+	srv.sessions["cookie-1"] = session{
+		CookieID: "cookie-1",
+		Username: "alice",
+		Sub:      "internal|alice",
+		ClientSessions: []clientSession{{
+			ClientID:      "client-1",
+			AdvertisedSub: "internal|alice",
+			RedirectURI:   "http://localhost:8080/callback",
+		}},
+	}
+
+	hint, _, err := srv.issueToken("internal|alice", []string{"client-1"}, map[string]any{"sub": "internal|alice"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("issue id_token_hint: %v", err)
+	}
+
+	query := url.Values{
+		"client_id":     {"client-1"},
+		"redirect_uri":  {"http://localhost:8080/callback"},
+		"state":         {"state-1"},
+		"prompt":        {"none"},
+		"id_token_hint": {hint},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/authorize?"+query.Encode(), nil)
+	rec := httptest.NewRecorder()
+
+	srv.authorize(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if loc.Query().Get("code") == "" {
+		t.Fatalf("expected a code for a hint matching a live session, got %q", loc.String())
+	}
+	if got := loc.Query().Get("error"); got != "" {
+		t.Fatalf("expected no error, got %q", got)
+	}
+}
+
+func TestPromptNoneWithoutMatchingSessionRedirectsWithError(t *testing.T) {
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		subjectType: "public",
+		sessions:    map[string]session{},
+		codeMeta:    map[string]codeMetadataEntry{},
+		authContext: map[string]authContextEntry{},
+		privateKey:  key,
+		publicKey:   &key.PublicKey,
+	}
+
+	hint, _, err := srv.issueToken("internal|nobody", []string{"client-1"}, map[string]any{"sub": "internal|nobody"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("issue id_token_hint: %v", err)
+	}
+
+	query := url.Values{
+		"client_id":     {"client-1"},
+		"redirect_uri":  {"http://localhost:8080/callback"},
+		"state":         {"state-1"},
+		"prompt":        {"none"},
+		"id_token_hint": {hint},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/authorize?"+query.Encode(), nil)
+	rec := httptest.NewRecorder()
+
+	srv.authorize(rec, req)
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected status %d, got %d", http.StatusSeeOther, rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	if got := loc.Query().Get("error"); got != "login_required" {
+		t.Fatalf("expected error login_required, got %q", got)
+	}
+	if got := loc.Query().Get("state"); got != "state-1" {
+		t.Fatalf("expected state to be echoed, got %q", got)
+	}
+	if got := loc.Query().Get("iss"); got != srv.externalURL {
+		t.Fatalf("expected iss %q, got %q", srv.externalURL, got)
+	}
+}
