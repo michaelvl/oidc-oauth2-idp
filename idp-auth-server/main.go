@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,8 +73,12 @@ type codeMetadataEntry struct {
 
 // registrationMethodAutomatic marks a client that was registered implicitly the
 // first time it was seen at /authorize, i.e. without the client ever asking to
-// be registered. Dynamic registration (RFC 7591) will add further methods.
+// be registered, as opposed to registrationMethodDynamic.
 const registrationMethodAutomatic = "automatic"
+
+// registrationMethodDynamic marks a client that registered itself at /register
+// using RFC 7591 dynamic client registration.
+const registrationMethodDynamic = "dynamic"
 
 // clientRegistration holds the RFC 7591 client metadata for a registered client.
 // Field names and JSON tags follow RFC 7591 section 2 so a registration can be
@@ -82,6 +87,13 @@ const registrationMethodAutomatic = "automatic"
 type clientRegistration struct {
 	ClientID         string `json:"client_id"`
 	ClientIDIssuedAt int64  `json:"client_id_issued_at"`
+
+	// ClientSecret is issued only to clients that register dynamically with a
+	// secret-based token endpoint auth method. ClientSecretExpiresAt is a pointer
+	// because RFC 7591 requires it alongside a secret, where 0 means "never
+	// expires" - a value omitempty would drop.
+	ClientSecret          string `json:"client_secret,omitempty"`
+	ClientSecretExpiresAt *int64 `json:"client_secret_expires_at,omitempty"`
 
 	RedirectURIs            []string `json:"redirect_uris,omitempty"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
@@ -213,9 +225,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	handler := withCORS(withLogging(logger, newMux(srv)))
+
+	logger.Info("listening", "addr", "0.0.0.0:"+srv.appPort)
+	if err := http.ListenAndServe("0.0.0.0:"+srv.appPort, handler); err != nil {
+		logger.Error("server exited", "error", err.Error())
+		os.Exit(1)
+	}
+}
+
+func newMux(srv *server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.index)
 	mux.HandleFunc("/clients", srv.clientsPage)
+	mux.HandleFunc("/register", srv.register)
 	mux.HandleFunc("/style.css", srv.styleCSS)
 	mux.HandleFunc("/logout", srv.logout)
 	mux.HandleFunc("/authorize", srv.authorize)
@@ -228,18 +251,10 @@ func main() {
 	mux.HandleFunc("/.well-known/jwks.json", srv.jwks)
 	mux.HandleFunc("/.well-known/openid-configuration", srv.openidConfiguration)
 	for i := 1; i <= 8; i++ {
-		path := fmt.Sprintf("/avatars/%d.svg", i)
-		mux.HandleFunc(path, srv.avatar)
+		mux.HandleFunc(fmt.Sprintf("/avatars/%d.svg", i), srv.avatar)
 		mux.HandleFunc(fmt.Sprintf("/internal/avatars/%d.svg", i), srv.internalAvatar)
 	}
-
-	handler := withCORS(withLogging(logger, mux))
-
-	logger.Info("listening", "addr", "0.0.0.0:"+srv.appPort)
-	if err := http.ListenAndServe("0.0.0.0:"+srv.appPort, handler); err != nil {
-		logger.Error("server exited", "error", err.Error())
-		os.Exit(1)
-	}
+	return mux
 }
 
 func parseLogLevelFlag() (slog.Level, error) {
@@ -447,6 +462,157 @@ func (s *server) clientsPage(w http.ResponseWriter, r *http.Request) {
 	renderTemplate(w, s.templates["clients"], clientsData{Clients: views})
 }
 
+// Metadata values this IdP accepts at the dynamic registration endpoint. The
+// token endpoint does not yet authenticate clients at all, so every auth method
+// listed here is accepted but none of them is enforced.
+var (
+	supportedGrantTypes               = []string{"authorization_code", "refresh_token"}
+	supportedResponseTypes            = []string{"code"}
+	supportedTokenEndpointAuthMethods = []string{"client_secret_basic", "client_secret_post", "none"}
+)
+
+// register implements RFC 7591 dynamic client registration. The endpoint is open:
+// no initial access token is required, matching the rest of this IdP's permissive
+// demo posture.
+func (s *server) register(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	logRequest(s.log(), "register", r)
+
+	// Decoding straight into clientRegistration reuses the RFC 7591 JSON tags;
+	// every server-controlled field is overwritten below, so a client cannot
+	// choose its own client_id, secret, or registration method.
+	var reg clientRegistration
+	if err := json.NewDecoder(r.Body).Decode(&reg); err != nil {
+		writeRegistrationError(w, "invalid_client_metadata", "request body must be a JSON object of client metadata")
+		return
+	}
+
+	if err := normalizeRegistration(&reg); err != nil {
+		writeRegistrationError(w, err.code, err.description)
+		return
+	}
+
+	reg.ClientID = uuid.NewString()
+	reg.ClientIDIssuedAt = time.Now().UTC().Unix()
+	reg.RegistrationMethod = registrationMethodDynamic
+
+	if reg.TokenEndpointAuthMethod != "none" {
+		secret, err := newClientSecret()
+		if err != nil {
+			s.log().Error("client secret generation failed", "error", err.Error())
+			writeRegistrationError(w, "invalid_client_metadata", "could not issue a client secret")
+			return
+		}
+		reg.ClientSecret = secret
+		// 0 means the secret does not expire (RFC 7591 section 3.2.1).
+		neverExpires := int64(0)
+		reg.ClientSecretExpiresAt = &neverExpires
+	}
+
+	s.mu.Lock()
+	if s.clients == nil {
+		s.clients = map[string]clientRegistration{}
+	}
+	s.clients[reg.ClientID] = reg
+	s.mu.Unlock()
+
+	s.log().Info("registered client", "client_id", reg.ClientID, "registration_method", reg.RegistrationMethod, "client_name", reg.ClientName)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(reg)
+}
+
+// registrationError is an RFC 7591 section 3.2.2 registration error response.
+type registrationError struct {
+	code        string
+	description string
+}
+
+// normalizeRegistration applies RFC 7591 defaults to client-supplied metadata and
+// rejects anything this IdP cannot honour.
+func normalizeRegistration(reg *clientRegistration) *registrationError {
+	if len(reg.GrantTypes) == 0 {
+		reg.GrantTypes = []string{"authorization_code"}
+	}
+	if len(reg.ResponseTypes) == 0 {
+		reg.ResponseTypes = []string{"code"}
+	}
+	if reg.TokenEndpointAuthMethod == "" {
+		reg.TokenEndpointAuthMethod = "client_secret_basic"
+	}
+
+	for _, grant := range reg.GrantTypes {
+		if !slices.Contains(supportedGrantTypes, grant) {
+			return &registrationError{"invalid_client_metadata", fmt.Sprintf("unsupported grant_type %q", grant)}
+		}
+	}
+	for _, responseType := range reg.ResponseTypes {
+		if !slices.Contains(supportedResponseTypes, responseType) {
+			return &registrationError{"invalid_client_metadata", fmt.Sprintf("unsupported response_type %q", responseType)}
+		}
+	}
+	if !slices.Contains(supportedTokenEndpointAuthMethods, reg.TokenEndpointAuthMethod) {
+		return &registrationError{"invalid_client_metadata", fmt.Sprintf("unsupported token_endpoint_auth_method %q", reg.TokenEndpointAuthMethod)}
+	}
+
+	// The authorization_code grant is the only redirect-based flow here, so a
+	// client asking for it must say where to redirect.
+	if slices.Contains(reg.GrantTypes, "authorization_code") && len(reg.RedirectURIs) == 0 {
+		return &registrationError{"invalid_redirect_uri", "redirect_uris is required for the authorization_code grant"}
+	}
+	for _, redirectURI := range reg.RedirectURIs {
+		if err := validateRedirectURI(redirectURI); err != nil {
+			return &registrationError{"invalid_redirect_uri", err.Error()}
+		}
+	}
+
+	reg.RedirectURIs = dedupeStrings(reg.RedirectURIs)
+	reg.Scope = strings.Join(dedupeStrings(strings.Fields(reg.Scope)), " ")
+	reg.GrantTypes = dedupeStrings(reg.GrantTypes)
+	reg.ResponseTypes = dedupeStrings(reg.ResponseTypes)
+	return nil
+}
+
+// validateRedirectURI enforces RFC 7591 section 2: a redirect URI must be an
+// absolute URI and must not carry a fragment.
+func validateRedirectURI(redirectURI string) error {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return fmt.Errorf("redirect_uri %q is not a valid URI", redirectURI)
+	}
+	if !u.IsAbs() {
+		return fmt.Errorf("redirect_uri %q must be an absolute URI", redirectURI)
+	}
+	if u.Fragment != "" || strings.Contains(redirectURI, "#") {
+		return fmt.Errorf("redirect_uri %q must not contain a fragment", redirectURI)
+	}
+	return nil
+}
+
+func newClientSecret() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func writeRegistrationError(w http.ResponseWriter, code, description string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"error":             code,
+		"error_description": description,
+	})
+}
+
 // registerClientLocked registers a client the first time it is seen and keeps the
 // observed metadata current on later requests. This IdP accepts any client, so
 // registration is a recording of what the client did, not a decision to admit it.
@@ -460,6 +626,11 @@ func (s *server) registerClientLocked(clientID, redirectURI, scope string) {
 	}
 
 	reg, known := s.clients[clientID]
+	if known && reg.RegistrationMethod != registrationMethodAutomatic {
+		// A client that registered itself owns its metadata; what it happens to
+		// send on the wire must not silently widen its registration.
+		return
+	}
 	if !known {
 		reg = clientRegistration{
 			ClientID:         clientID,
@@ -1195,7 +1366,8 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 		"code_challenge_methods_supported":               []string{"S256", "plain"},
 		"scopes_supported":                               []string{"openid", "profile", "email", "offline_access"},
 		"claims_supported":                               []string{"sub", "name", "picture", "email", "email_verified"},
-		"token_endpoint_auth_methods_supported":          []string{"client_secret_basic"},
+		"registration_endpoint":                          s.externalURL + "/register",
+		"token_endpoint_auth_methods_supported":          supportedTokenEndpointAuthMethods,
 		"authorization_response_iss_parameter_supported": true,
 	}
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -890,6 +891,309 @@ func TestTemplateDirsProvideClientsTemplate(t *testing.T) {
 			if !strings.Contains(body, want) {
 				t.Fatalf("expected %s clients page to contain %q", dir, want)
 			}
+		}
+	}
+}
+
+// registerRequest posts client metadata to /register and returns the response.
+func registerRequest(t *testing.T, srv *server, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.register(rec, req)
+	return rec
+}
+
+func TestRegisterCreatesDynamicRegistration(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	rec := registerRequest(t, srv, `{
+		"client_name": "demo-app",
+		"redirect_uris": ["http://localhost:8080/callback"],
+		"grant_types": ["authorization_code", "refresh_token"],
+		"response_types": ["code"],
+		"scope": "openid profile offline_access",
+		"token_endpoint_auth_method": "client_secret_basic"
+	}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected Cache-Control no-store, got %q", got)
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	clientID, _ := resp["client_id"].(string)
+	if clientID == "" {
+		t.Fatalf("expected a client_id in the response, got %v", resp)
+	}
+	if resp["registration_method"] != registrationMethodDynamic {
+		t.Fatalf("expected registration method %q, got %v", registrationMethodDynamic, resp["registration_method"])
+	}
+	if secret, _ := resp["client_secret"].(string); secret == "" {
+		t.Fatalf("expected a client_secret for client_secret_basic, got %v", resp)
+	}
+	if _, ok := resp["client_secret_expires_at"]; !ok {
+		t.Fatalf("expected client_secret_expires_at alongside the secret, got %v", resp)
+	}
+	if resp["client_name"] != "demo-app" {
+		t.Fatalf("expected client_name to be echoed back, got %v", resp["client_name"])
+	}
+
+	reg, ok := srv.clients[clientID]
+	if !ok {
+		t.Fatalf("expected the registration to be stored under %s", clientID)
+	}
+	if reg.RegistrationMethod != registrationMethodDynamic {
+		t.Fatalf("stored registration method %q", reg.RegistrationMethod)
+	}
+	if reg.ClientIDIssuedAt == 0 {
+		t.Fatalf("expected client_id_issued_at to be set")
+	}
+}
+
+func TestRegisterAppliesRFC7591Defaults(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	rec := registerRequest(t, srv, `{"redirect_uris": ["http://localhost:8080/callback"]}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var reg clientRegistration
+	if err := json.Unmarshal(rec.Body.Bytes(), &reg); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !reflect.DeepEqual(reg.GrantTypes, []string{"authorization_code"}) {
+		t.Fatalf("unexpected default grant types: %v", reg.GrantTypes)
+	}
+	if !reflect.DeepEqual(reg.ResponseTypes, []string{"code"}) {
+		t.Fatalf("unexpected default response types: %v", reg.ResponseTypes)
+	}
+	if reg.TokenEndpointAuthMethod != "client_secret_basic" {
+		t.Fatalf("unexpected default token endpoint auth method: %q", reg.TokenEndpointAuthMethod)
+	}
+}
+
+func TestRegisterPublicClientGetsNoSecret(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	rec := registerRequest(t, srv, `{"redirect_uris": ["http://localhost:8080/callback"], "token_endpoint_auth_method": "none"}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if _, ok := resp["client_secret"]; ok {
+		t.Fatalf("did not expect a client_secret for token_endpoint_auth_method=none")
+	}
+	if _, ok := resp["client_secret_expires_at"]; ok {
+		t.Fatalf("did not expect client_secret_expires_at without a secret")
+	}
+}
+
+func TestRegisterIgnoresClientSuppliedClientID(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	rec := registerRequest(t, srv, `{
+		"client_id": "attacker-chosen",
+		"client_secret": "attacker-chosen-secret",
+		"registration_method": "automatic",
+		"redirect_uris": ["http://localhost:8080/callback"]
+	}`)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var reg clientRegistration
+	if err := json.Unmarshal(rec.Body.Bytes(), &reg); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if reg.ClientID == "attacker-chosen" {
+		t.Fatalf("expected the server to assign the client_id")
+	}
+	if reg.ClientSecret == "attacker-chosen-secret" {
+		t.Fatalf("expected the server to assign the client_secret")
+	}
+	if reg.RegistrationMethod != registrationMethodDynamic {
+		t.Fatalf("expected registration method %q, got %q", registrationMethodDynamic, reg.RegistrationMethod)
+	}
+	if _, ok := srv.clients["attacker-chosen"]; ok {
+		t.Fatalf("did not expect a registration under the client-supplied ID")
+	}
+}
+
+func TestRegisterRejectsInvalidMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		code string
+	}{
+		{"malformed JSON", `not json`, "invalid_client_metadata"},
+		{"missing redirect URIs", `{"client_name": "demo-app"}`, "invalid_redirect_uri"},
+		{"relative redirect URI", `{"redirect_uris": ["/callback"]}`, "invalid_redirect_uri"},
+		{"redirect URI with fragment", `{"redirect_uris": ["http://localhost:8080/callback#frag"]}`, "invalid_redirect_uri"},
+		{"unsupported grant type", `{"redirect_uris": ["http://localhost:8080/cb"], "grant_types": ["client_credentials"]}`, "invalid_client_metadata"},
+		{"unsupported response type", `{"redirect_uris": ["http://localhost:8080/cb"], "response_types": ["token"]}`, "invalid_client_metadata"},
+		{"unsupported auth method", `{"redirect_uris": ["http://localhost:8080/cb"], "token_endpoint_auth_method": "private_key_jwt"}`, "invalid_client_metadata"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := &server{clients: map[string]clientRegistration{}}
+			rec := registerRequest(t, srv, tc.body)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			var resp map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("unmarshal error response: %v", err)
+			}
+			if resp["error"] != tc.code {
+				t.Fatalf("expected error %q, got %q", tc.code, resp["error"])
+			}
+			if resp["error_description"] == "" {
+				t.Fatalf("expected an error_description")
+			}
+			if len(srv.clients) != 0 {
+				t.Fatalf("expected no registration to be stored")
+			}
+		})
+	}
+}
+
+func TestRegisterRejectsNonPOST(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{}
+	rec := httptest.NewRecorder()
+	srv.register(rec, httptest.NewRequest(http.MethodGet, "/register", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestAuthorizeDoesNotMutateDynamicRegistration(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{
+		clients: map[string]clientRegistration{
+			"client-1": {
+				ClientID:           "client-1",
+				ClientIDIssuedAt:   100,
+				RedirectURIs:       []string{"http://localhost:8080/callback"},
+				GrantTypes:         []string{"authorization_code"},
+				Scope:              "openid",
+				RegistrationMethod: registrationMethodDynamic,
+			},
+		},
+	}
+
+	srv.registerClientLocked("client-1", "http://evil.example.com/callback", "openid admin offline_access")
+
+	reg := srv.clients["client-1"]
+	if !reflect.DeepEqual(reg.RedirectURIs, []string{"http://localhost:8080/callback"}) {
+		t.Fatalf("expected redirect URIs to be untouched, got %v", reg.RedirectURIs)
+	}
+	if reg.Scope != "openid" {
+		t.Fatalf("expected scope to be untouched, got %q", reg.Scope)
+	}
+	if !reflect.DeepEqual(reg.GrantTypes, []string{"authorization_code"}) {
+		t.Fatalf("expected grant types to be untouched, got %v", reg.GrantTypes)
+	}
+}
+
+func TestDiscoveryAdvertisesRegistrationEndpoint(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{externalURL: "http://127.0.0.1:5001", subjectType: "public"}
+	rec := httptest.NewRecorder()
+	srv.openidConfiguration(rec, httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil))
+
+	var config map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &config); err != nil {
+		t.Fatalf("unmarshal discovery document: %v", err)
+	}
+	if got := config["registration_endpoint"]; got != "http://127.0.0.1:5001/register" {
+		t.Fatalf("unexpected registration_endpoint: %v", got)
+	}
+}
+
+// TestRegisterAndListThroughMux drives the routed endpoints the way a client
+// does: register over HTTP, then confirm the registration shows up on /clients
+// rendered from the real templates.
+func TestRegisterAndListThroughMux(t *testing.T) {
+	t.Parallel()
+
+	templates, err := loadTemplates(filepath.Join("kodata", "templates"))
+	if err != nil {
+		t.Fatalf("load templates: %v", err)
+	}
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		clients:     map[string]clientRegistration{},
+		sessions:    map[string]session{},
+		authContext: map[string]authContextEntry{},
+		codeMeta:    map[string]codeMetadataEntry{},
+		templates:   templates,
+	}
+	ts := httptest.NewServer(newMux(srv))
+	defer ts.Close()
+
+	body := `{"client_name":"demo-app","redirect_uris":["http://localhost:8080/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"scope":"openid profile email offline_access","token_endpoint_auth_method":"client_secret_basic"}`
+	resp, err := http.Post(ts.URL+"/register", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post registration: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d", http.StatusCreated, resp.StatusCode)
+	}
+
+	var reg clientRegistration
+	if err := json.NewDecoder(resp.Body).Decode(&reg); err != nil {
+		t.Fatalf("decode registration: %v", err)
+	}
+	if reg.ClientID == "" || reg.ClientSecret == "" {
+		t.Fatalf("expected client_id and client_secret, got %+v", reg)
+	}
+
+	listing, err := http.Get(ts.URL + "/clients")
+	if err != nil {
+		t.Fatalf("get clients: %v", err)
+	}
+	defer func() { _ = listing.Body.Close() }()
+	if listing.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, listing.StatusCode)
+	}
+	page, err := io.ReadAll(listing.Body)
+	if err != nil {
+		t.Fatalf("read clients page: %v", err)
+	}
+	for _, want := range []string{reg.ClientID, "registration method: dynamic", "demo-app"} {
+		if !strings.Contains(string(page), want) {
+			t.Fatalf("expected clients page to contain %q", want)
 		}
 	}
 }

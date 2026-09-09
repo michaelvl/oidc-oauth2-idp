@@ -31,15 +31,48 @@ At runtime, it serves both browser-facing pages and protocol endpoints from one
 process, including `/authorize`, `/token`, `/userinfo`,
 `/.well-known/openid-configuration`, and `/.well-known/jwks.json`.
 
-Clients are not validated, but they are recorded: the first time a `client_id`
-appears at `/authorize` it is registered in an in-memory client registry with
-RFC 7591 client metadata (`redirect_uris`, `grant_types`, `response_types`,
-`scope`, ...) derived from the request. Each registration also carries a
-non-standard `registration_method` field recording how it came about; automatic
-registration on first use is `automatic`. `/` lists active sessions and
-`/clients` lists the client registrations. The registry is a stepping stone
-towards dynamic client registration (RFC 7591) and client validation; it does
-not yet reject unknown clients or mismatched redirect URIs.
+Clients live in an in-memory registry holding RFC 7591 client metadata
+(`redirect_uris`, `grant_types`, `response_types`, `scope`, ...). Every
+registration also carries a non-standard `registration_method` field recording
+how it came about:
+
+- `automatic`: the client never asked to be registered. The first time a
+  `client_id` appears at `/authorize`, a registration is synthesized from the
+  request, and later requests merge in newly observed redirect URIs and scopes.
+- `dynamic`: the client registered itself at `/register` using RFC 7591 dynamic
+  client registration. Self-registered metadata is authoritative — traffic at
+  `/authorize` never widens it.
+
+`/` lists active sessions and `/clients` lists the client registrations.
+
+#### Dynamic client registration (`POST /register`)
+
+The registration endpoint is open: no initial access token is required, matching
+the rest of this IdP's permissive demo posture. It is advertised as
+`registration_endpoint` in the discovery document. Post RFC 7591 client metadata
+and get back the registration, with a server-assigned `client_id` (any
+client-supplied `client_id`, `client_secret`, or `registration_method` is
+ignored):
+
+```sh
+make register-client                      # against http://127.0.0.1:5001
+make register-client IDP_URL=http://host  # against another IdP
+```
+
+Metadata defaults follow RFC 7591: `grant_types` defaults to
+`["authorization_code"]`, `response_types` to `["code"]`, and
+`token_endpoint_auth_method` to `client_secret_basic`. A `client_secret` (with
+`client_secret_expires_at: 0`, meaning it never expires) is issued unless the
+client registers with `token_endpoint_auth_method: none`. Registration is
+rejected with HTTP 400 and an RFC 7591 error (`invalid_client_metadata` or
+`invalid_redirect_uri`) for malformed JSON, unsupported grant/response types or
+auth methods, a missing `redirect_uris` on the `authorization_code` grant, or a
+redirect URI that is relative or carries a fragment.
+
+⚠️ Registration is recorded but not yet enforced. The token endpoint still does
+not authenticate clients, `/authorize` still accepts unknown clients and
+redirect URIs that do not match a registration, and issued client secrets are
+displayed in full on the unauthenticated `/clients` page.
 
 Environment variables:
 
