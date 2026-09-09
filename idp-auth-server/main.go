@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -463,8 +464,8 @@ func (s *server) clientsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // Metadata values this IdP accepts at the dynamic registration endpoint. The
-// token endpoint does not yet authenticate clients at all, so every auth method
-// listed here is accepted but none of them is enforced.
+// token endpoint enforces these auth methods for dynamically registered clients
+// only; automatically registered clients are never authenticated.
 var (
 	supportedGrantTypes               = []string{"authorization_code", "refresh_token"}
 	supportedResponseTypes            = []string{"code"}
@@ -637,9 +638,13 @@ func (s *server) registerClientLocked(clientID, redirectURI, scope string) {
 			ClientIDIssuedAt: time.Now().UTC().Unix(),
 			ResponseTypes:    []string{"code"},
 			GrantTypes:       []string{"authorization_code"},
-			// Automatic registration never sees how the client authenticates at the
-			// token endpoint, so the RFC 7591 default is assumed.
-			TokenEndpointAuthMethod: "client_secret_basic",
+			// Automatic registration never sees the client register, so there is no
+			// secret to compare and no way to learn how it authenticates. Recording
+			// "none" keeps the registration honest about what is actually enforced.
+			// FIXME: Authenticate automatically registered clients - doing so needs a
+			// way to provision a secret out of band, or an initial access token on
+			// /register so every client arrives through dynamic registration.
+			TokenEndpointAuthMethod: "none",
 			RegistrationMethod:      registrationMethodAutomatic,
 		}
 	}
@@ -1016,6 +1021,70 @@ func (s *server) issueCodeAndRedirect(w http.ResponseWriter, r *http.Request, se
 	http.Redirect(w, r, redirURL, http.StatusSeeOther)
 }
 
+// clientCredentials are the client authentication credentials presented at the
+// token endpoint, together with the method used to present them.
+type clientCredentials struct {
+	clientID string
+	secret   string
+	method   string
+}
+
+// parseClientCredentials reads client credentials from the Authorization header
+// (client_secret_basic) or the request body (client_secret_post), falling back to
+// "none" for public clients. The request form must already be parsed.
+func parseClientCredentials(r *http.Request) clientCredentials {
+	// RFC 6749 section 2.3.1 wants the Basic credentials form-urlencoded before
+	// base64. Client IDs are UUIDs and secrets are base64url here, so nothing this
+	// IdP issues needs that decoding step.
+	if clientID, secret, ok := r.BasicAuth(); ok {
+		return clientCredentials{clientID: clientID, secret: secret, method: "client_secret_basic"}
+	}
+	if secret := r.Form.Get("client_secret"); secret != "" {
+		return clientCredentials{clientID: r.Form.Get("client_id"), secret: secret, method: "client_secret_post"}
+	}
+	return clientCredentials{clientID: r.Form.Get("client_id"), method: "none"}
+}
+
+// authenticateClientLocked verifies presented credentials against the stored
+// registration for clientID. Only dynamically registered confidential clients are
+// enforced: those are the ones this IdP issued a secret to and whose declared auth
+// method it can trust. Callers must hold s.mu.
+func (s *server) authenticateClientLocked(clientID string, creds clientCredentials) error {
+	reg, known := s.clients[clientID]
+	if !known || reg.RegistrationMethod != registrationMethodDynamic {
+		// FIXME: Authenticate automatically registered clients. This IdP holds no
+		// secret for them and cannot tell a legitimate client from an impostor, so
+		// anyone presenting a valid code or refresh token is served.
+		return nil
+	}
+	if reg.TokenEndpointAuthMethod == "none" {
+		// A public client authenticates nothing; PKCE is the only binding.
+		return nil
+	}
+	if creds.method != reg.TokenEndpointAuthMethod {
+		return fmt.Errorf("client registered with %s but presented %s", reg.TokenEndpointAuthMethod, creds.method)
+	}
+	if creds.clientID != clientID {
+		return fmt.Errorf("credentials are for client %q, grant is for client %q", creds.clientID, clientID)
+	}
+	if reg.ClientSecret == "" {
+		return errors.New("no client secret stored for a confidential client")
+	}
+	if subtle.ConstantTimeCompare([]byte(creds.secret), []byte(reg.ClientSecret)) != 1 {
+		return errors.New("client secret mismatch")
+	}
+	return nil
+}
+
+// writeClientAuthError reports failed client authentication per RFC 6749 section
+// 5.2. WWW-Authenticate is required only when the client tried HTTP Basic.
+func writeClientAuthError(w http.ResponseWriter, method string) {
+	if method == "client_secret_basic" {
+		w.Header().Set("WWW-Authenticate", `Basic realm="token"`)
+	}
+	writeOAuthError(w, http.StatusUnauthorized, "invalid_client")
+}
+
 func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -1024,9 +1093,11 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	logRequest(s.log(), "token", r)
 	_ = r.ParseForm()
 
-	clientAuth := r.Header.Get("Authorization")
-	s.log().Debug("get-token client auth", "authorization", clientAuth)
-	// FIXME: Validate client authentication (client_secret_basic or client_secret_post).
+	// Credentials are read here but verified only once the grant has established
+	// which client is really being authenticated; a request-supplied client_id is
+	// never trusted on its own.
+	creds := parseClientCredentials(r)
+	s.log().Debug("get-token client auth", "auth_method", creds.method, "client_id", creds.clientID)
 
 	grantType := r.Form.Get("grant_type")
 	s.log().Debug("get-token grant type", "grant_type", grantType)
@@ -1169,6 +1240,18 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.log().Warn("get-token invalid grant type", "grant_type", grantType)
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type")
+		return
+	}
+
+	// Authentication runs after the grant so that clientID comes from server-side
+	// state. An authorization code is already consumed at this point, which makes a
+	// failed attempt burn the code - the safe direction for a one-time credential.
+	s.mu.Lock()
+	authErr := s.authenticateClientLocked(clientID, creds)
+	s.mu.Unlock()
+	if authErr != nil {
+		s.log().Warn("get-token client authentication failed", "client_id", clientID, "error", authErr.Error())
+		writeClientAuthError(w, creds.method)
 		return
 	}
 

@@ -39,9 +39,12 @@ how it came about:
 - `automatic`: the client never asked to be registered. The first time a
   `client_id` appears at `/authorize`, a registration is synthesized from the
   request, and later requests merge in newly observed redirect URIs and scopes.
+  Such a registration records `token_endpoint_auth_method: none`, because the IdP
+  holds no secret for the client and never sees how it authenticates.
 - `dynamic`: the client registered itself at `/register` using RFC 7591 dynamic
   client registration. Self-registered metadata is authoritative — traffic at
-  `/authorize` never widens it.
+  `/authorize` never widens it — and it is the only registration method whose
+  client authentication is enforced at `/token`.
 
 `/` lists active sessions and `/clients` lists the client registrations.
 
@@ -69,10 +72,24 @@ rejected with HTTP 400 and an RFC 7591 error (`invalid_client_metadata` or
 auth methods, a missing `redirect_uris` on the `authorization_code` grant, or a
 redirect URI that is relative or carries a fragment.
 
-⚠️ Registration is recorded but not yet enforced. The token endpoint still does
-not authenticate clients, `/authorize` still accepts unknown clients and
-redirect URIs that do not match a registration, and issued client secrets are
-displayed in full on the unauthenticated `/clients` page.
+#### Client authentication at `/token`
+
+A dynamically registered client must authenticate with the method it registered:
+`client_secret_basic` (HTTP Basic) or `client_secret_post` (a `client_secret`
+form field). Presenting the wrong secret, the wrong method, or credentials for a
+different client is rejected with HTTP 401 and `invalid_client`. Clients
+registered with `token_endpoint_auth_method: none` are public — PKCE is their
+only binding to the authorization code.
+
+The client identity that is checked comes from server-side state (the
+authorization code or refresh token), never from a `client_id` in the request.
+
+⚠️ Registration is only partly enforced. Automatically registered and entirely
+unknown clients are still served at `/token` without any client authentication —
+there is no secret to compare — so a leaked code or refresh token is enough.
+`/authorize` still accepts unknown clients and redirect URIs that do not match a
+registration, and issued client secrets are displayed in full on the
+unauthenticated `/clients` page.
 
 Environment variables:
 

@@ -773,7 +773,7 @@ func TestClientMetadataJSONUsesRFC7591FieldNames(t *testing.T) {
 		ClientID:                "client-1",
 		ClientIDIssuedAt:        1700000000,
 		RedirectURIs:            []string{"http://localhost:8080/callback"},
-		TokenEndpointAuthMethod: "client_secret_basic",
+		TokenEndpointAuthMethod: "none",
 		GrantTypes:              []string{"authorization_code"},
 		ResponseTypes:           []string{"code"},
 		Scope:                   "openid",
@@ -1143,20 +1143,29 @@ func TestDiscoveryAdvertisesRegistrationEndpoint(t *testing.T) {
 // TestRegisterAndListThroughMux drives the routed endpoints the way a client
 // does: register over HTTP, then confirm the registration shows up on /clients
 // rendered from the real templates.
-func TestRegisterAndListThroughMux(t *testing.T) {
+func TestRegisterListAndAuthenticateThroughMux(t *testing.T) {
 	t.Parallel()
 
 	templates, err := loadTemplates(filepath.Join("kodata", "templates"))
 	if err != nil {
 		t.Fatalf("load templates: %v", err)
 	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
 	srv := &server{
-		externalURL: "http://127.0.0.1:5001",
-		clients:     map[string]clientRegistration{},
-		sessions:    map[string]session{},
-		authContext: map[string]authContextEntry{},
-		codeMeta:    map[string]codeMetadataEntry{},
-		templates:   templates,
+		externalURL:          "http://127.0.0.1:5001",
+		subjectType:          "public",
+		accessTokenLifetime:  300,
+		refreshTokenLifetime: 3600,
+		clients:              map[string]clientRegistration{},
+		sessions:             map[string]session{},
+		authContext:          map[string]authContextEntry{},
+		codeMeta:             map[string]codeMetadataEntry{},
+		templates:            templates,
+		privateKey:           key,
+		publicKey:            &key.PublicKey,
 	}
 	ts := httptest.NewServer(newMux(srv))
 	defer ts.Close()
@@ -1195,5 +1204,351 @@ func TestRegisterAndListThroughMux(t *testing.T) {
 		if !strings.Contains(string(page), want) {
 			t.Fatalf("expected clients page to contain %q", want)
 		}
+	}
+
+	// The secret the endpoint issued must be the one /token compares against, so
+	// carry it into a real exchange. Two codes are seeded because a failed
+	// authentication still consumes the code it was presented with.
+	srv.mu.Lock()
+	srv.sessions["cookie-1"] = session{
+		CookieID: "cookie-1",
+		Username: "alice",
+		Sub:      "internal|alice",
+		ClientSessions: []clientSession{{
+			SessionID:     "client-session-1",
+			ClientID:      reg.ClientID,
+			AdvertisedSub: "internal|alice",
+			Scope:         "openid",
+			RedirectURI:   "http://localhost:8080/callback",
+		}},
+	}
+	srv.codeMeta["code-1"] = codeMetadataEntry{CookieID: "cookie-1", ClientID: reg.ClientID}
+	srv.codeMeta["code-2"] = codeMetadataEntry{CookieID: "cookie-1", ClientID: reg.ClientID}
+	srv.mu.Unlock()
+
+	exchange := func(code, secret string) *http.Response {
+		t.Helper()
+
+		form := url.Values{
+			"grant_type":   {"authorization_code"},
+			"code":         {code},
+			"redirect_uri": {"http://localhost:8080/callback"},
+		}
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/token", strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatalf("build token request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.SetBasicAuth(reg.ClientID, secret)
+
+		tokenResp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("post token: %v", err)
+		}
+		return tokenResp
+	}
+
+	rejected := exchange("code-1", reg.ClientSecret+"-wrong")
+	defer func() { _ = rejected.Body.Close() }()
+	if rejected.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d for a wrong secret, got %d", http.StatusUnauthorized, rejected.StatusCode)
+	}
+
+	accepted := exchange("code-2", reg.ClientSecret)
+	defer func() { _ = accepted.Body.Close() }()
+	if accepted.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d for the issued secret, got %d", http.StatusOK, accepted.StatusCode)
+	}
+	tokens := map[string]any{}
+	if err := json.NewDecoder(accepted.Body).Decode(&tokens); err != nil {
+		t.Fatalf("decode token response: %v", err)
+	}
+	if accessToken, _ := tokens["access_token"].(string); accessToken == "" {
+		t.Fatalf("expected an access token, got %v", tokens)
+	}
+}
+
+// newTokenExchangeServer builds a server holding one live session and one issued
+// authorization code for clientID, ready for a POST to /token.
+func newTokenExchangeServer(t *testing.T, clientID string) *server {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	srv := &server{
+		externalURL:          "http://127.0.0.1:5001",
+		subjectType:          "public",
+		accessTokenLifetime:  300,
+		refreshTokenLifetime: 3600,
+		sessions:             map[string]session{},
+		codeMeta:             map[string]codeMetadataEntry{},
+		authContext:          map[string]authContextEntry{},
+		clients:              map[string]clientRegistration{},
+		privateKey:           key,
+		publicKey:            &key.PublicKey,
+	}
+	srv.sessions["cookie-1"] = session{
+		CookieID: "cookie-1",
+		Username: "alice",
+		Sub:      "internal|alice",
+		ClientSessions: []clientSession{{
+			SessionID:     "client-session-1",
+			ClientID:      clientID,
+			AdvertisedSub: "internal|alice",
+			Scope:         "openid",
+			RedirectURI:   "http://localhost:8080/callback",
+		}},
+	}
+	srv.codeMeta["code-1"] = codeMetadataEntry{CookieID: "cookie-1", ClientID: clientID}
+	return srv
+}
+
+// tokenRequest exchanges the code issued by newTokenExchangeServer, applying the
+// given client authentication.
+func tokenRequest(t *testing.T, srv *server, auth func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+
+	form := url.Values{
+		"grant_type":   {"authorization_code"},
+		"code":         {"code-1"},
+		"redirect_uri": {"http://localhost:8080/callback"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if auth != nil {
+		auth(req)
+	}
+	rec := httptest.NewRecorder()
+	srv.token(rec, req)
+	return rec
+}
+
+func TestTokenAcceptsDynamicClientWithBasicSecret(t *testing.T) {
+	t.Parallel()
+
+	srv := newTokenExchangeServer(t, "client-1")
+	srv.clients["client-1"] = clientRegistration{
+		ClientID:                "client-1",
+		ClientSecret:            "s3cret",
+		TokenEndpointAuthMethod: "client_secret_basic",
+		RegistrationMethod:      registrationMethodDynamic,
+	}
+
+	rec := tokenRequest(t, srv, func(req *http.Request) {
+		req.SetBasicAuth("client-1", "s3cret")
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	response := map[string]any{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal token response: %v", err)
+	}
+	if response["access_token"] == "" || response["access_token"] == nil {
+		t.Fatalf("expected an access token, got %v", response)
+	}
+}
+
+func TestTokenAcceptsDynamicClientWithSecretPost(t *testing.T) {
+	t.Parallel()
+
+	srv := newTokenExchangeServer(t, "client-1")
+	srv.clients["client-1"] = clientRegistration{
+		ClientID:                "client-1",
+		ClientSecret:            "s3cret",
+		TokenEndpointAuthMethod: "client_secret_post",
+		RegistrationMethod:      registrationMethodDynamic,
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {"code-1"},
+		"redirect_uri":  {"http://localhost:8080/callback"},
+		"client_id":     {"client-1"},
+		"client_secret": {"s3cret"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.token(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestTokenRejectsDynamicClientAuthFailures(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		registration clientRegistration
+		auth         func(*http.Request)
+		wantBasic    bool
+	}{
+		{
+			name: "no credentials",
+			registration: clientRegistration{
+				ClientSecret: "s3cret", TokenEndpointAuthMethod: "client_secret_basic",
+			},
+			auth: nil,
+		},
+		{
+			name: "wrong secret",
+			registration: clientRegistration{
+				ClientSecret: "s3cret", TokenEndpointAuthMethod: "client_secret_basic",
+			},
+			auth:      func(req *http.Request) { req.SetBasicAuth("client-1", "guess") },
+			wantBasic: true,
+		},
+		{
+			name: "credentials for another client",
+			registration: clientRegistration{
+				ClientSecret: "s3cret", TokenEndpointAuthMethod: "client_secret_basic",
+			},
+			auth:      func(req *http.Request) { req.SetBasicAuth("client-2", "s3cret") },
+			wantBasic: true,
+		},
+		{
+			name: "wrong auth method",
+			registration: clientRegistration{
+				ClientSecret: "s3cret", TokenEndpointAuthMethod: "client_secret_post",
+			},
+			auth:      func(req *http.Request) { req.SetBasicAuth("client-1", "s3cret") },
+			wantBasic: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := newTokenExchangeServer(t, "client-1")
+			reg := tc.registration
+			reg.ClientID = "client-1"
+			reg.RegistrationMethod = registrationMethodDynamic
+			srv.clients["client-1"] = reg
+
+			rec := tokenRequest(t, srv, tc.auth)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, rec.Code, rec.Body.String())
+			}
+			response := map[string]string{}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatalf("unmarshal error response: %v", err)
+			}
+			if response["error"] != "invalid_client" {
+				t.Fatalf("expected error invalid_client, got %v", response)
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); tc.wantBasic != (got != "") {
+				t.Fatalf("unexpected WWW-Authenticate header %q for basic=%v", got, tc.wantBasic)
+			}
+		})
+	}
+}
+
+func TestTokenAllowsDynamicPublicClientWithoutSecret(t *testing.T) {
+	t.Parallel()
+
+	srv := newTokenExchangeServer(t, "client-1")
+	srv.clients["client-1"] = clientRegistration{
+		ClientID:                "client-1",
+		TokenEndpointAuthMethod: "none",
+		RegistrationMethod:      registrationMethodDynamic,
+	}
+
+	if rec := tokenRequest(t, srv, nil); rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestTokenAllowsAutomaticClientWithoutAuthentication(t *testing.T) {
+	t.Parallel()
+
+	// Automatic registrations carry no secret this IdP could check, so they are
+	// admitted unauthenticated - see the FIXME in authenticateClientLocked.
+	srv := newTokenExchangeServer(t, "client-1")
+	srv.registerClientLocked("client-1", "http://localhost:8080/callback", "openid")
+
+	if rec := tokenRequest(t, srv, nil); rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestTokenAllowsUnregisteredClientWithoutAuthentication(t *testing.T) {
+	t.Parallel()
+
+	srv := newTokenExchangeServer(t, "client-1")
+
+	if rec := tokenRequest(t, srv, nil); rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
+func TestRegisterClientRecordsPublicAuthMethod(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	srv.registerClientLocked("client-1", "http://localhost:8080/callback", "openid")
+
+	if got := srv.clients["client-1"].TokenEndpointAuthMethod; got != "none" {
+		t.Fatalf("expected automatic registrations to record token_endpoint_auth_method none, got %q", got)
+	}
+}
+
+func TestParseClientCredentials(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		form     url.Values
+		basic    []string
+		expected clientCredentials
+	}{
+		{
+			name:     "basic auth",
+			basic:    []string{"client-1", "s3cret"},
+			expected: clientCredentials{clientID: "client-1", secret: "s3cret", method: "client_secret_basic"},
+		},
+		{
+			name:     "secret in body",
+			form:     url.Values{"client_id": {"client-1"}, "client_secret": {"s3cret"}},
+			expected: clientCredentials{clientID: "client-1", secret: "s3cret", method: "client_secret_post"},
+		},
+		{
+			name:     "no credentials",
+			form:     url.Values{"client_id": {"client-1"}},
+			expected: clientCredentials{clientID: "client-1", method: "none"},
+		},
+		{
+			name:     "basic auth wins over body",
+			form:     url.Values{"client_id": {"client-2"}, "client_secret": {"other"}},
+			basic:    []string{"client-1", "s3cret"},
+			expected: clientCredentials{clientID: "client-1", secret: "s3cret", method: "client_secret_basic"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tc.form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if tc.basic != nil {
+				req.SetBasicAuth(tc.basic[0], tc.basic[1])
+			}
+			if err := req.ParseForm(); err != nil {
+				t.Fatalf("parse form: %v", err)
+			}
+
+			if got := parseClientCredentials(req); got != tc.expected {
+				t.Fatalf("expected %+v, got %+v", tc.expected, got)
+			}
+		})
 	}
 }
