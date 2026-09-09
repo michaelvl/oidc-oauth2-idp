@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -666,5 +667,229 @@ func TestPromptNoneWithoutMatchingSessionRedirectsWithError(t *testing.T) {
 	}
 	if got := loc.Query().Get("iss"); got != srv.externalURL {
 		t.Fatalf("expected iss %q, got %q", srv.externalURL, got)
+	}
+}
+
+func TestRegisterClientRecordsAutomaticRegistration(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	srv.registerClientLocked("client-1", "http://localhost:8080/callback", "openid profile")
+
+	reg, ok := srv.clients["client-1"]
+	if !ok {
+		t.Fatalf("expected client-1 to be registered")
+	}
+	if reg.RegistrationMethod != registrationMethodAutomatic {
+		t.Fatalf("expected registration method %q, got %q", registrationMethodAutomatic, reg.RegistrationMethod)
+	}
+	if reg.ClientIDIssuedAt == 0 {
+		t.Fatalf("expected client_id_issued_at to be set")
+	}
+	if !reflect.DeepEqual(reg.RedirectURIs, []string{"http://localhost:8080/callback"}) {
+		t.Fatalf("unexpected redirect URIs: %v", reg.RedirectURIs)
+	}
+	if !reflect.DeepEqual(reg.ResponseTypes, []string{"code"}) {
+		t.Fatalf("unexpected response types: %v", reg.ResponseTypes)
+	}
+	if !reflect.DeepEqual(reg.GrantTypes, []string{"authorization_code"}) {
+		t.Fatalf("unexpected grant types: %v", reg.GrantTypes)
+	}
+	if reg.Scope != "openid profile" {
+		t.Fatalf("unexpected scope: %q", reg.Scope)
+	}
+}
+
+func TestRegisterClientIgnoresEmptyClientID(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	srv.registerClientLocked("", "http://localhost:8080/callback", "openid")
+
+	if len(srv.clients) != 0 {
+		t.Fatalf("expected no registrations, got %d", len(srv.clients))
+	}
+}
+
+func TestRegisterClientMergesObservedMetadata(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{clients: map[string]clientRegistration{}}
+	srv.registerClientLocked("client-1", "http://localhost:8080/callback", "openid")
+	first := srv.clients["client-1"].ClientIDIssuedAt
+
+	srv.registerClientLocked("client-1", "http://localhost:8080/callback", "openid")
+	srv.registerClientLocked("client-1", "http://localhost:9090/callback", "openid offline_access")
+
+	reg := srv.clients["client-1"]
+	if reg.ClientIDIssuedAt != first {
+		t.Fatalf("expected client_id_issued_at to be preserved, got %d want %d", reg.ClientIDIssuedAt, first)
+	}
+	want := []string{"http://localhost:8080/callback", "http://localhost:9090/callback"}
+	if !reflect.DeepEqual(reg.RedirectURIs, want) {
+		t.Fatalf("expected redirect URIs %v, got %v", want, reg.RedirectURIs)
+	}
+	if reg.Scope != "openid offline_access" {
+		t.Fatalf("unexpected scope: %q", reg.Scope)
+	}
+	wantGrants := []string{"authorization_code", "refresh_token"}
+	if !reflect.DeepEqual(reg.GrantTypes, wantGrants) {
+		t.Fatalf("expected grant types %v, got %v", wantGrants, reg.GrantTypes)
+	}
+}
+
+func TestAuthorizeRegistersUnknownClient(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		sessions:    map[string]session{},
+		authContext: map[string]authContextEntry{},
+		codeMeta:    map[string]codeMetadataEntry{},
+		templates:   map[string]*template.Template{"authenticate": template.Must(template.New("authenticate").Parse("{{.ReqID}}"))},
+	}
+
+	params := url.Values{}
+	params.Set("client_id", "client-1")
+	params.Set("redirect_uri", "http://localhost:8080/callback")
+	params.Set("scope", "openid profile")
+	req := httptest.NewRequest(http.MethodGet, "/authorize?"+params.Encode(), nil)
+	srv.authorize(httptest.NewRecorder(), req)
+
+	reg, ok := srv.clients["client-1"]
+	if !ok {
+		t.Fatalf("expected authorize to register client-1")
+	}
+	if reg.RegistrationMethod != registrationMethodAutomatic {
+		t.Fatalf("expected registration method %q, got %q", registrationMethodAutomatic, reg.RegistrationMethod)
+	}
+}
+
+func TestClientMetadataJSONUsesRFC7591FieldNames(t *testing.T) {
+	t.Parallel()
+
+	raw, err := clientMetadataJSON(clientRegistration{
+		ClientID:                "client-1",
+		ClientIDIssuedAt:        1700000000,
+		RedirectURIs:            []string{"http://localhost:8080/callback"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+		GrantTypes:              []string{"authorization_code"},
+		ResponseTypes:           []string{"code"},
+		Scope:                   "openid",
+		RegistrationMethod:      registrationMethodAutomatic,
+	})
+	if err != nil {
+		t.Fatalf("render metadata: %v", err)
+	}
+
+	metadata := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	for _, name := range []string{"client_id", "client_id_issued_at", "redirect_uris", "token_endpoint_auth_method", "grant_types", "response_types", "scope", "registration_method"} {
+		if _, ok := metadata[name]; !ok {
+			t.Fatalf("expected metadata field %q, got %v", name, metadata)
+		}
+	}
+	// Descriptive metadata is absent until a client registers itself with it.
+	if _, ok := metadata["client_name"]; ok {
+		t.Fatalf("expected client_name to be omitted when unset")
+	}
+}
+
+func TestClientsPageListsRegistrations(t *testing.T) {
+	t.Parallel()
+
+	tpl := template.Must(template.New("clients").Parse(`{{range .Clients}}{{.ClientID}}|{{.RegistrationMethod}}|{{.IssuedAt}}{{end}}`))
+	srv := &server{
+		templates: map[string]*template.Template{"clients": tpl},
+		clients: map[string]clientRegistration{
+			"client-1": {ClientID: "client-1", ClientIDIssuedAt: 100, Scope: "openid", RegistrationMethod: registrationMethodAutomatic},
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	srv.clientsPage(rec, httptest.NewRequest(http.MethodGet, "/clients", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if got := rec.Body.String(); got != "client-1|automatic|1970-01-01T00:01:40Z" {
+		t.Fatalf("unexpected listing: %q", got)
+	}
+}
+
+func TestClientsPageOrdersByRegistrationTime(t *testing.T) {
+	t.Parallel()
+
+	tpl := template.Must(template.New("clients").Parse(`{{range .Clients}}{{.ClientID}} {{end}}`))
+	srv := &server{
+		templates: map[string]*template.Template{"clients": tpl},
+		clients: map[string]clientRegistration{
+			"late":  {ClientID: "late", ClientIDIssuedAt: 200},
+			"early": {ClientID: "early", ClientIDIssuedAt: 100},
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	srv.clientsPage(rec, httptest.NewRequest(http.MethodGet, "/clients", nil))
+
+	if got := rec.Body.String(); got != "early late " {
+		t.Fatalf("unexpected order: %q", got)
+	}
+}
+
+func TestClientsPageRejectsNonGET(t *testing.T) {
+	t.Parallel()
+
+	srv := &server{}
+	rec := httptest.NewRecorder()
+	srv.clientsPage(rec, httptest.NewRequest(http.MethodPost, "/clients", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestTemplateDirsProvideClientsTemplate(t *testing.T) {
+	t.Parallel()
+
+	for _, dir := range []string{
+		filepath.Join("kodata", "templates"),
+		filepath.Join("kodata", "templates-ascii"),
+	} {
+		templates, err := loadTemplates(dir)
+		if err != nil {
+			t.Fatalf("load templates from %s: %v", dir, err)
+		}
+		if templates["clients"] == nil {
+			t.Fatalf("expected a clients template in %s", dir)
+		}
+
+		srv := &server{
+			templates: templates,
+			clients: map[string]clientRegistration{
+				"demo-app": {
+					ClientID:           "demo-app",
+					ClientIDIssuedAt:   1700000000,
+					RedirectURIs:       []string{"http://localhost:8080/callback"},
+					GrantTypes:         []string{"authorization_code", "refresh_token"},
+					ResponseTypes:      []string{"code"},
+					Scope:              "openid profile offline_access",
+					RegistrationMethod: registrationMethodAutomatic,
+				},
+			},
+		}
+		rec := httptest.NewRecorder()
+		srv.clientsPage(rec, httptest.NewRequest(http.MethodGet, "/clients", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("rendering %s clients template: status %d", dir, rec.Code)
+		}
+		body := rec.Body.String()
+		for _, want := range []string{"demo-app", "automatic", "http://localhost:8080/callback", "openid profile offline_access", "&#34;registration_method&#34;"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("expected %s clients page to contain %q", dir, want)
+			}
+		}
 	}
 }

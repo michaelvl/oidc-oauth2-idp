@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page page--wide">
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 16 16">
+          <path d="M1.75 2h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 14H1.75A1.75 1.75 0 0 1 0 12.25v-8.5C0 2.784.784 2 1.75 2m0 1.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25zM3.5 5.5h4V7h-4zm0 3h6V10h-6z"></path>
+        </svg>
+      </div>
+      <h1 class="heading">Client Registrations</h1>
+      <p class="meta"><a href="/">&larr; Active sessions</a></p>
+      <div class="card">
+      {{if .Clients}}
+        {{range $client := .Clients}}
+        <section class="session">
+          <p class="meta"><strong>{{$client.ClientID}}</strong></p>
+          <p class="meta">registration method: {{$client.RegistrationMethod}}</p>
+          <p class="meta">registered: {{$client.IssuedAt}}</p>
+          <p class="meta">client metadata:</p>
+          <pre class="claims-view">{{$client.MetadataJSON}}</pre>
+        </section>
+        {{end}}
+      {{else}}
+        <p class="meta">No client registrations.</p>
+      {{end}}
+      </div>
+    </main>
+  </body>
+</html>

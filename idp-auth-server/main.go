@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +70,42 @@ type codeMetadataEntry struct {
 	Nonce    string
 }
 
+// registrationMethodAutomatic marks a client that was registered implicitly the
+// first time it was seen at /authorize, i.e. without the client ever asking to
+// be registered. Dynamic registration (RFC 7591) will add further methods.
+const registrationMethodAutomatic = "automatic"
+
+// clientRegistration holds the RFC 7591 client metadata for a registered client.
+// Field names and JSON tags follow RFC 7591 section 2 so a registration can be
+// served verbatim as a client registration document, with the non-standard
+// registration_method recording how the client came to be registered.
+type clientRegistration struct {
+	ClientID         string `json:"client_id"`
+	ClientIDIssuedAt int64  `json:"client_id_issued_at"`
+
+	RedirectURIs            []string `json:"redirect_uris,omitempty"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method,omitempty"`
+	GrantTypes              []string `json:"grant_types,omitempty"`
+	ResponseTypes           []string `json:"response_types,omitempty"`
+	Scope                   string   `json:"scope,omitempty"`
+
+	// Descriptive metadata. Automatic registration has no source for these; they
+	// are here for clients that register themselves with RFC 7591 metadata.
+	ClientName      string   `json:"client_name,omitempty"`
+	ClientURI       string   `json:"client_uri,omitempty"`
+	LogoURI         string   `json:"logo_uri,omitempty"`
+	Contacts        []string `json:"contacts,omitempty"`
+	TosURI          string   `json:"tos_uri,omitempty"`
+	PolicyURI       string   `json:"policy_uri,omitempty"`
+	JwksURI         string   `json:"jwks_uri,omitempty"`
+	SoftwareID      string   `json:"software_id,omitempty"`
+	SoftwareVersion string   `json:"software_version,omitempty"`
+
+	// RegistrationMethod is an extension to RFC 7591 metadata: it records how
+	// this registration came about, e.g. "automatic".
+	RegistrationMethod string `json:"registration_method"`
+}
+
 type server struct {
 	mu sync.Mutex
 
@@ -77,6 +114,7 @@ type server struct {
 	authContext map[string]authContextEntry
 	codeMeta    map[string]codeMetadataEntry
 	sessions    map[string]session
+	clients     map[string]clientRegistration
 
 	templates    map[string]*template.Template
 	templatesDir string
@@ -122,6 +160,20 @@ type clientSessionView struct {
 	RefreshTokenExpiry    string
 }
 
+type clientsData struct {
+	Clients []clientRegistrationView
+}
+
+// clientRegistrationView is deliberately thin: the metadata document carries
+// every registered field, so the page only lifts out how and when the client was
+// registered, which are not obvious from a JSON blob.
+type clientRegistrationView struct {
+	ClientID           string
+	RegistrationMethod string
+	IssuedAt           string
+	MetadataJSON       string
+}
+
 type authenticateData struct {
 	ReqID string
 }
@@ -163,6 +215,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", srv.index)
+	mux.HandleFunc("/clients", srv.clientsPage)
 	mux.HandleFunc("/style.css", srv.styleCSS)
 	mux.HandleFunc("/logout", srv.logout)
 	mux.HandleFunc("/authorize", srv.authorize)
@@ -252,6 +305,7 @@ func newServer(logger *slog.Logger) (*server, error) {
 		authContext:          map[string]authContextEntry{},
 		codeMeta:             map[string]codeMetadataEntry{},
 		sessions:             map[string]session{},
+		clients:              map[string]clientRegistration{},
 		templates:            templates,
 		templatesDir:         templatesDir,
 		appPort:              appPort,
@@ -269,7 +323,7 @@ func newServer(logger *slog.Logger) (*server, error) {
 }
 
 func loadTemplates(dir string) (map[string]*template.Template, error) {
-	names := []string{"index", "authenticate", "authorize", "endsession", "error"}
+	names := []string{"index", "clients", "authenticate", "authorize", "endsession", "error"}
 	out := make(map[string]*template.Template, len(names))
 	for _, name := range names {
 		tpl, err := template.ParseFiles(filepath.Join(dir, name+".html"))
@@ -352,6 +406,98 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	renderTemplate(w, s.templates["index"], data)
+}
+
+func (s *server) clientsPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+
+	s.mu.Lock()
+	regs := make([]clientRegistration, 0, len(s.clients))
+	for _, reg := range s.clients {
+		regs = append(regs, reg)
+	}
+	s.mu.Unlock()
+
+	// Oldest registration first, with the client ID breaking ties so the listing
+	// is stable across reloads.
+	sort.Slice(regs, func(i, j int) bool {
+		if regs[i].ClientIDIssuedAt != regs[j].ClientIDIssuedAt {
+			return regs[i].ClientIDIssuedAt < regs[j].ClientIDIssuedAt
+		}
+		return regs[i].ClientID < regs[j].ClientID
+	})
+
+	views := make([]clientRegistrationView, 0, len(regs))
+	for _, reg := range regs {
+		metadataJSON, err := clientMetadataJSON(reg)
+		if err != nil {
+			metadataJSON = "{}"
+		}
+		views = append(views, clientRegistrationView{
+			ClientID:           reg.ClientID,
+			RegistrationMethod: reg.RegistrationMethod,
+			IssuedAt:           time.Unix(reg.ClientIDIssuedAt, 0).UTC().Format(time.RFC3339),
+			MetadataJSON:       metadataJSON,
+		})
+	}
+
+	renderTemplate(w, s.templates["clients"], clientsData{Clients: views})
+}
+
+// registerClientLocked registers a client the first time it is seen and keeps the
+// observed metadata current on later requests. This IdP accepts any client, so
+// registration is a recording of what the client did, not a decision to admit it.
+// Callers must hold s.mu.
+func (s *server) registerClientLocked(clientID, redirectURI, scope string) {
+	if clientID == "" {
+		return
+	}
+	if s.clients == nil {
+		s.clients = map[string]clientRegistration{}
+	}
+
+	reg, known := s.clients[clientID]
+	if !known {
+		reg = clientRegistration{
+			ClientID:         clientID,
+			ClientIDIssuedAt: time.Now().UTC().Unix(),
+			ResponseTypes:    []string{"code"},
+			GrantTypes:       []string{"authorization_code"},
+			// Automatic registration never sees how the client authenticates at the
+			// token endpoint, so the RFC 7591 default is assumed.
+			TokenEndpointAuthMethod: "client_secret_basic",
+			RegistrationMethod:      registrationMethodAutomatic,
+		}
+	}
+
+	if redirectURI != "" {
+		reg.RedirectURIs = dedupeStrings(append(reg.RedirectURIs, redirectURI))
+	}
+	if scope != "" {
+		reg.Scope = strings.Join(dedupeStrings(append(strings.Fields(reg.Scope), strings.Fields(scope)...)), " ")
+	}
+	if hasScope(scope, "offline_access") {
+		reg.GrantTypes = dedupeStrings(append(reg.GrantTypes, "refresh_token"))
+	}
+
+	s.clients[clientID] = reg
+
+	if !known {
+		s.log().Info("registered client", "client_id", clientID, "registration_method", reg.RegistrationMethod, "redirect_uri", redirectURI, "scope", scope)
+	}
+}
+
+// clientMetadataJSON renders a registration as the RFC 7591 client metadata
+// document that /clients displays.
+func clientMetadataJSON(reg clientRegistration) (string, error) {
+	b, err := json.MarshalIndent(reg, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 func (s *server) styleCSS(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +595,10 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 	prompt := r.Form.Get("prompt")
 	codeChallengeMethod := r.Form.Get("code_challenge_method")
 	codeChallenge := r.Form.Get("code_challenge")
+
+	s.mu.Lock()
+	s.registerClientLocked(clientID, redirectURI, scope)
+	s.mu.Unlock()
 
 	reqID := uuid.NewString()
 	var sessionCookie string

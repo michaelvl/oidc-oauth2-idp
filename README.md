@@ -31,6 +31,16 @@ At runtime, it serves both browser-facing pages and protocol endpoints from one
 process, including `/authorize`, `/token`, `/userinfo`,
 `/.well-known/openid-configuration`, and `/.well-known/jwks.json`.
 
+Clients are not validated, but they are recorded: the first time a `client_id`
+appears at `/authorize` it is registered in an in-memory client registry with
+RFC 7591 client metadata (`redirect_uris`, `grant_types`, `response_types`,
+`scope`, ...) derived from the request. Each registration also carries a
+non-standard `registration_method` field recording how it came about; automatic
+registration on first use is `automatic`. `/` lists active sessions and
+`/clients` lists the client registrations. The registry is a stepping stone
+towards dynamic client registration (RFC 7591) and client validation; it does
+not yet reject unknown clients or mismatched redirect URIs.
+
 Environment variables:
 
 - `PORT` (default: `5001`): HTTP listen port.

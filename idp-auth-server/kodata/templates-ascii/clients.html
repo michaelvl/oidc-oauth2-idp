@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel="stylesheet" type="text/css" href="style.css">
+  </head>
+  <body>
+    <main class="page page--wide">
+      <pre class="banner">+===============+
+|    CLIENTS    |
++===============+</pre>
+
+      <section class="ascii-card">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><span class="edge">|</span><div class="content title">CLIENT REGISTRATIONS</div><span class="edge">|</span></div>
+        <div class="ascii-row"><span class="edge">|</span><div class="content"><a href="/">&lt;- ACTIVE SESSIONS</a></div><span class="edge">|</span></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+
+      {{if .Clients}}
+      {{range $client := .Clients}}
+      <section class="ascii-card session">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><span class="edge">|</span><div class="content">[==] client: <strong>{{$client.ClientID}}</strong></div><span class="edge">|</span></div>
+        <div class="ascii-row"><span class="edge">|</span><div class="content">registration method: {{$client.RegistrationMethod}}</div><span class="edge">|</span></div>
+        <div class="ascii-row"><span class="edge">|</span><div class="content">registered: {{$client.IssuedAt}}</div><span class="edge">|</span></div>
+        <div class="ascii-row"><span class="edge">|</span><div class="content muted">client metadata</div><span class="edge">|</span></div>
+        <div class="claims-dump"><pre>{{$client.MetadataJSON}}</pre></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+      {{end}}
+      {{else}}
+      <section class="ascii-card">
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+        <div class="ascii-row"><span class="edge">|</span><div class="content muted">No client registrations.</div><span class="edge">|</span></div>
+        <p class="ascii-line">+------------------------------------------------------------+</p>
+      </section>
+      {{end}}
+    </main>
+  </body>
+</html>
