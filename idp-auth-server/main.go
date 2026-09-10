@@ -1336,24 +1336,74 @@ func (s *server) userinfo(w http.ResponseWriter, r *http.Request) {
 
 	csID, _ := claims["csid"].(string)
 	s.mu.Lock()
-	_, sess, _ := s.getSessionByClientSessionIDLocked(csID)
+	_, sess, cs := s.getSessionByClientSessionIDLocked(csID)
+	var issued map[string]any
+	if cs != nil {
+		issued = copyClaims(cs.IDTokenClaims)
+	}
 	s.mu.Unlock()
 
 	out := map[string]any{}
 	sub, _ := claims["sub"].(string)
 	out["sub"] = sub
-	if sess.Username != "" && hasScope(scope, "profile") {
-		out["preferred_username"] = sess.Username
-		out["name"] = capitalize(sess.Username)
-		out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sess.Username))
-	}
-	if sess.Username != "" && hasScope(scope, "email") {
-		out["email"] = s.emailForUsername(sess.Username)
-		out["email_verified"] = true
+	if issued != nil {
+		// Mirror the ID token the client was actually given, so edits made in the
+		// session claims editor reach the RP through userinfo too. The subject stays
+		// authoritative from the access token: OIDC requires the two to agree.
+		for name, value := range issued {
+			if _, skip := idTokenOnlyClaims[name]; skip || name == "sub" {
+				continue
+			}
+			if s, ok := claimScopes[name]; ok && !hasScope(scope, s) {
+				continue
+			}
+			out[name] = value
+		}
+	} else {
+		// No ID token was issued for this client session (a non-openid access token),
+		// so there is nothing to mirror; derive the claims from the login instead.
+		if sess.Username != "" && hasScope(scope, "profile") {
+			out["preferred_username"] = sess.Username
+			out["name"] = capitalize(sess.Username)
+			out["picture"] = fmt.Sprintf("%s/avatars/%d.svg", s.externalURL, avatarIndex(sess.Username))
+		}
+		if sess.Username != "" && hasScope(scope, "email") {
+			out["email"] = s.emailForUsername(sess.Username)
+			out["email_verified"] = true
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// idTokenOnlyClaims are ID token mechanics that describe the token rather than the
+// end-user, and so are never echoed in a userinfo response.
+var idTokenOnlyClaims = map[string]struct{}{
+	"iss": {}, "aud": {}, "azp": {}, "exp": {}, "iat": {}, "nbf": {}, "jti": {},
+	"nonce": {}, "auth_time": {}, "at_hash": {}, "c_hash": {}, "acr": {}, "amr": {},
+}
+
+// claimScopes maps the standard claims this IdP can issue to the scope that must be
+// granted for userinfo to return them. Claims not listed here — anything added by
+// hand in the claims editor — are returned regardless of scope.
+var claimScopes = map[string]string{
+	"name":               "profile",
+	"preferred_username": "profile",
+	"picture":            "profile",
+	"email":              "email",
+	"email_verified":     "email",
+}
+
+func copyClaims(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *server) endsession(w http.ResponseWriter, r *http.Request) {

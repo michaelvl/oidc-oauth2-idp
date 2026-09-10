@@ -1552,3 +1552,180 @@ func TestParseClientCredentials(t *testing.T) {
 		})
 	}
 }
+
+// newUserinfoServer builds a server holding one session whose single client session
+// carries the given issued ID token claims (nil for "no ID token was issued"), plus
+// an access token for that client session with the given scope.
+func newUserinfoServer(t *testing.T, scope string, issued map[string]any) (*server, string) {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	const csid = "cs-userinfo"
+	srv := &server{
+		externalURL: "http://127.0.0.1:5001",
+		emailDomain: "example.com",
+		privateKey:  key,
+		publicKey:   &key.PublicKey,
+		sessions: map[string]session{
+			"cookie-1": {
+				Username: "foo",
+				Sub:      "xxfooxx",
+				CookieID: "cookie-1",
+				ClientSessions: []clientSession{
+					{SessionID: csid, ClientID: "local-dev-client", Scope: scope, IDTokenClaims: issued},
+				},
+			},
+		},
+	}
+
+	token, _, err := srv.issueToken("advertised-sub", []string{"userinfo"}, map[string]any{
+		"scope":     scope,
+		"token_use": "access",
+		"csid":      csid,
+	}, time.Now().Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	return srv, token
+}
+
+func callUserinfo(t *testing.T, srv *server, token string) map[string]any {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/userinfo", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+
+	srv.userinfo(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode userinfo: %v", err)
+	}
+	return out
+}
+
+func TestUserinfoMirrorsEditedIDTokenClaims(t *testing.T) {
+	t.Parallel()
+
+	srv, token := newUserinfoServer(t, "openid profile email", map[string]any{
+		"sub":                "5eZrZRr7Wa8Qdy_2cBeJ_r_NKvTvt9JXk4K5a3VUy5M",
+		"azp":                "local-dev-client",
+		"nonce":              "eCWDRyFTSzyVFiEXvhIQlQ",
+		"exp":                float64(1789058606),
+		"iss":                "http://localhost:5001",
+		"aud":                []any{"local-dev-client"},
+		"name":               "nFoo",
+		"preferred_username": "pufoo",
+		"email":              "efoo@example.com",
+		"email_verified":     true,
+		"picture":            "http://localhost:5001/avatars/5.svg",
+		"custom_claim":       "kept",
+	})
+
+	out := callUserinfo(t, srv, token)
+
+	// The edited values reach the RP rather than the values derived from "foo".
+	for name, want := range map[string]any{
+		"name":               "nFoo",
+		"preferred_username": "pufoo",
+		"email":              "efoo@example.com",
+		"email_verified":     true,
+		"picture":            "http://localhost:5001/avatars/5.svg",
+		"custom_claim":       "kept",
+	} {
+		if out[name] != want {
+			t.Errorf("claim %s: expected %v, got %v", name, want, out[name])
+		}
+	}
+
+	// Token mechanics are not user claims and must not be echoed.
+	for _, name := range []string{"iss", "aud", "exp", "azp", "nonce"} {
+		if _, present := out[name]; present {
+			t.Errorf("claim %s should not appear in userinfo, got %v", name, out[name])
+		}
+	}
+
+	// The subject stays authoritative from the access token.
+	if out["sub"] != "advertised-sub" {
+		t.Errorf("expected sub from access token, got %v", out["sub"])
+	}
+}
+
+func TestUserinfoAppliesScopeToMirroredClaims(t *testing.T) {
+	t.Parallel()
+
+	issued := map[string]any{
+		"name":               "nFoo",
+		"preferred_username": "pufoo",
+		"picture":            "http://localhost:5001/avatars/5.svg",
+		"email":              "efoo@example.com",
+		"email_verified":     true,
+		"custom_claim":       "kept",
+	}
+
+	t.Run("profile only", func(t *testing.T) {
+		t.Parallel()
+
+		srv, token := newUserinfoServer(t, "openid profile", issued)
+		out := callUserinfo(t, srv, token)
+
+		if out["preferred_username"] != "pufoo" {
+			t.Errorf("expected mirrored preferred_username, got %v", out["preferred_username"])
+		}
+		for _, name := range []string{"email", "email_verified"} {
+			if _, present := out[name]; present {
+				t.Errorf("claim %s requires the email scope, got %v", name, out[name])
+			}
+		}
+		if out["custom_claim"] != "kept" {
+			t.Errorf("expected scope-less custom claim to be returned, got %v", out["custom_claim"])
+		}
+	})
+
+	t.Run("email only", func(t *testing.T) {
+		t.Parallel()
+
+		srv, token := newUserinfoServer(t, "openid email", issued)
+		out := callUserinfo(t, srv, token)
+
+		if out["email"] != "efoo@example.com" {
+			t.Errorf("expected mirrored email, got %v", out["email"])
+		}
+		for _, name := range []string{"name", "preferred_username", "picture"} {
+			if _, present := out[name]; present {
+				t.Errorf("claim %s requires the profile scope, got %v", name, out[name])
+			}
+		}
+	})
+}
+
+func TestUserinfoFallsBackToSessionWithoutIDToken(t *testing.T) {
+	t.Parallel()
+
+	srv, token := newUserinfoServer(t, "profile email", nil)
+	out := callUserinfo(t, srv, token)
+
+	want := map[string]any{
+		"preferred_username": "foo",
+		"name":               "Foo",
+		"email":              "foo@example.com",
+		"email_verified":     true,
+		"picture":            fmt.Sprintf("http://127.0.0.1:5001/avatars/%d.svg", avatarIndex("foo")),
+	}
+	for name, value := range want {
+		if out[name] != value {
+			t.Errorf("claim %s: expected %v, got %v", name, value, out[name])
+		}
+	}
+	if out["sub"] != "advertised-sub" {
+		t.Errorf("expected sub from access token, got %v", out["sub"])
+	}
+}
