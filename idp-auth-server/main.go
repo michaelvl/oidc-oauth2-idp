@@ -81,6 +81,13 @@ const registrationMethodAutomatic = "automatic"
 // using RFC 7591 dynamic client registration.
 const registrationMethodDynamic = "dynamic"
 
+// registrationMethodClientIDMetadataDocument marks a client whose client_id is a
+// URL that the IdP dereferenced to fetch the client's own metadata document, per
+// draft-ietf-oauth-client-id-metadata-document-02. Such a client never calls
+// /register and is never issued a secret: its document is authoritative and its
+// published keys are what it authenticates with.
+const registrationMethodClientIDMetadataDocument = "client_id_metadata_document"
+
 // clientRegistration holds the RFC 7591 client metadata for a registered client.
 // Field names and JSON tags follow RFC 7591 section 2 so a registration can be
 // served verbatim as a client registration document, with the non-standard
@@ -104,15 +111,21 @@ type clientRegistration struct {
 
 	// Descriptive metadata. Automatic registration has no source for these; they
 	// are here for clients that register themselves with RFC 7591 metadata.
-	ClientName      string   `json:"client_name,omitempty"`
-	ClientURI       string   `json:"client_uri,omitempty"`
-	LogoURI         string   `json:"logo_uri,omitempty"`
-	Contacts        []string `json:"contacts,omitempty"`
-	TosURI          string   `json:"tos_uri,omitempty"`
-	PolicyURI       string   `json:"policy_uri,omitempty"`
-	JwksURI         string   `json:"jwks_uri,omitempty"`
-	SoftwareID      string   `json:"software_id,omitempty"`
-	SoftwareVersion string   `json:"software_version,omitempty"`
+	ClientName string   `json:"client_name,omitempty"`
+	ClientURI  string   `json:"client_uri,omitempty"`
+	LogoURI    string   `json:"logo_uri,omitempty"`
+	Contacts   []string `json:"contacts,omitempty"`
+	TosURI     string   `json:"tos_uri,omitempty"`
+	PolicyURI  string   `json:"policy_uri,omitempty"`
+
+	// Jwks is the client's inline JWK set, kept raw because this IdP only ever
+	// hands it to a JWK parser. Together with JwksURI it is how a client
+	// registered from a client ID metadata document authenticates at /token.
+	Jwks    json.RawMessage `json:"jwks,omitempty"`
+	JwksURI string          `json:"jwks_uri,omitempty"`
+
+	SoftwareID      string `json:"software_id,omitempty"`
+	SoftwareVersion string `json:"software_version,omitempty"`
 
 	// RegistrationMethod is an extension to RFC 7591 metadata: it records how
 	// this registration came about, e.g. "automatic".
@@ -128,6 +141,17 @@ type server struct {
 	codeMeta    map[string]codeMetadataEntry
 	sessions    map[string]session
 	clients     map[string]clientRegistration
+
+	// clientIDMetadata caches fetched client ID metadata documents, keyed by the
+	// client identifier URL. Guarded by mu, but never held across a fetch.
+	clientIDMetadata           map[string]clientIDMetadataEntry
+	clientIDMetadataTTL        time.Duration
+	clientIDMetadataTimeout    time.Duration
+	allowLoopbackMetadataFetch bool
+
+	// privateKeyJWTJTIs records client assertion jti values until they expire, so
+	// that an assertion cannot be replayed.
+	privateKeyJWTJTIs map[string]time.Time
 
 	templates    map[string]*template.Template
 	templatesDir string
@@ -285,6 +309,9 @@ func newServer(logger *slog.Logger) (*server, error) {
 	accessLifetime := getenvDefaultInt("ACCESS_TOKEN_LIFETIME", 1200)
 	refreshLifetime := getenvDefaultInt("REFRESH_TOKEN_LIFETIME", 3600)
 
+	metadataTimeout := time.Duration(getenvDefaultInt("CLIENT_ID_METADATA_FETCH_TIMEOUT", int(clientIDMetadataDefaultTimeout/time.Second))) * time.Second
+	metadataTTL := time.Duration(getenvDefaultInt("CLIENT_ID_METADATA_TTL", int(clientIDMetadataDefaultTTL/time.Second))) * time.Second
+
 	subjectType := getenvDefault("SUBJECT_TYPE", "public")
 	var pairwiseSalt []byte
 	if subjectType == "pairwise" {
@@ -317,24 +344,31 @@ func newServer(logger *slog.Logger) (*server, error) {
 	}
 
 	return &server{
-		logger:               logger,
-		authContext:          map[string]authContextEntry{},
-		codeMeta:             map[string]codeMetadataEntry{},
-		sessions:             map[string]session{},
-		clients:              map[string]clientRegistration{},
-		templates:            templates,
-		templatesDir:         templatesDir,
-		appPort:              appPort,
-		externalURL:          externalURL,
-		protectPictureURL:    protectPictureURL,
-		extraAudiences:       extraAudiences,
-		emailDomain:          emailDomain,
-		accessTokenLifetime:  accessLifetime,
-		refreshTokenLifetime: refreshLifetime,
-		subjectType:          subjectType,
-		pairwiseSalt:         pairwiseSalt,
-		privateKey:           privateKey,
-		publicKey:            &privateKey.PublicKey,
+		logger:              logger,
+		authContext:         map[string]authContextEntry{},
+		codeMeta:            map[string]codeMetadataEntry{},
+		sessions:            map[string]session{},
+		clients:             map[string]clientRegistration{},
+		clientIDMetadata:    map[string]clientIDMetadataEntry{},
+		clientIDMetadataTTL: metadataTTL,
+		privateKeyJWTJTIs:   map[string]time.Time{},
+		// The draft's development exception: loopback metadata documents are
+		// fetchable only while this IdP is itself on a loopback address.
+		allowLoopbackMetadataFetch: externalURLIsLoopback(externalURL),
+		clientIDMetadataTimeout:    metadataTimeout,
+		templates:                  templates,
+		templatesDir:               templatesDir,
+		appPort:                    appPort,
+		externalURL:                externalURL,
+		protectPictureURL:          protectPictureURL,
+		extraAudiences:             extraAudiences,
+		emailDomain:                emailDomain,
+		accessTokenLifetime:        accessLifetime,
+		refreshTokenLifetime:       refreshLifetime,
+		subjectType:                subjectType,
+		pairwiseSalt:               pairwiseSalt,
+		privateKey:                 privateKey,
+		publicKey:                  &privateKey.PublicKey,
 	}, nil
 }
 
@@ -470,7 +504,18 @@ var (
 	supportedGrantTypes               = []string{"authorization_code", "refresh_token"}
 	supportedResponseTypes            = []string{"code"}
 	supportedTokenEndpointAuthMethods = []string{"client_secret_basic", "client_secret_post", "none"}
+
+	// supportedCodeChallengeMethods is both what discovery advertises and what
+	// /authorize accepts, so the two cannot drift apart.
+	supportedCodeChallengeMethods = []string{"S256", "plain"}
 )
+
+// advertisedTokenEndpointAuthMethods is what discovery reports. It is deliberately
+// wider than supportedTokenEndpointAuthMethods: private_key_jwt is how a client
+// registered from a client ID metadata document authenticates, but it is not
+// something /register can accept, because that endpoint has no way to learn the
+// client's public keys.
+var advertisedTokenEndpointAuthMethods = append(append([]string{}, supportedTokenEndpointAuthMethods...), "private_key_jwt")
 
 // register implements RFC 7591 dynamic client registration. The endpoint is open:
 // no initial access token is required, matching the rest of this IdP's permissive
@@ -491,7 +536,7 @@ func (s *server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := normalizeRegistration(&reg); err != nil {
+	if err := normalizeRegistration(&reg, supportedTokenEndpointAuthMethods, "client_secret_basic"); err != nil {
 		writeRegistrationError(w, err.code, err.description)
 		return
 	}
@@ -536,8 +581,11 @@ type registrationError struct {
 }
 
 // normalizeRegistration applies RFC 7591 defaults to client-supplied metadata and
-// rejects anything this IdP cannot honour.
-func normalizeRegistration(reg *clientRegistration) *registrationError {
+// rejects anything this IdP cannot honour. The accepted token endpoint auth
+// methods and the default to apply when the client names none are parameters
+// because /register and client ID metadata documents allow different sets: a
+// document may not name any shared-secret method at all.
+func normalizeRegistration(reg *clientRegistration, allowedAuthMethods []string, defaultAuthMethod string) *registrationError {
 	if len(reg.GrantTypes) == 0 {
 		reg.GrantTypes = []string{"authorization_code"}
 	}
@@ -545,7 +593,7 @@ func normalizeRegistration(reg *clientRegistration) *registrationError {
 		reg.ResponseTypes = []string{"code"}
 	}
 	if reg.TokenEndpointAuthMethod == "" {
-		reg.TokenEndpointAuthMethod = "client_secret_basic"
+		reg.TokenEndpointAuthMethod = defaultAuthMethod
 	}
 
 	for _, grant := range reg.GrantTypes {
@@ -558,7 +606,7 @@ func normalizeRegistration(reg *clientRegistration) *registrationError {
 			return &registrationError{"invalid_client_metadata", fmt.Sprintf("unsupported response_type %q", responseType)}
 		}
 	}
-	if !slices.Contains(supportedTokenEndpointAuthMethods, reg.TokenEndpointAuthMethod) {
+	if !slices.Contains(allowedAuthMethods, reg.TokenEndpointAuthMethod) {
 		return &registrationError{"invalid_client_metadata", fmt.Sprintf("unsupported token_endpoint_auth_method %q", reg.TokenEndpointAuthMethod)}
 	}
 
@@ -755,6 +803,62 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, s.externalURL, http.StatusSeeOther)
 }
 
+// resolveAuthorizeClient establishes which client an /authorize request is for and
+// enforces what that client's registration asserts. It reports whether the request
+// may continue; when it may not, the error response has already been written.
+//
+// Errors here are rendered as a page rather than redirected: at this point
+// redirect_uri is either unvalidated or known to be wrong, and sending an error to
+// an unregistered URI is exactly what registration is supposed to prevent.
+func (s *server) resolveAuthorizeClient(w http.ResponseWriter, clientID, redirectURI, scope, codeChallenge string) bool {
+	var reg clientRegistration
+	if s.isClientIDMetadataDocumentURL(clientID) {
+		resolved, err := s.resolveClientIDMetadata(clientID)
+		if err != nil {
+			s.log().Warn("could not resolve client id metadata document", "client_id", clientID, "error", err.Error())
+			s.renderAuthorizeError(w, "Could not resolve the client ID metadata document")
+			return false
+		}
+		reg = resolved
+	} else {
+		s.mu.Lock()
+		s.registerClientLocked(clientID, redirectURI, scope)
+		reg = s.clients[clientID]
+		s.mu.Unlock()
+	}
+
+	// Only a client that asserted its own redirect URIs is held to them. An
+	// automatic registration's redirect_uris are observed traffic, not a claim the
+	// client ever made, so matching against them would mean matching a request
+	// against itself.
+	switch reg.RegistrationMethod {
+	case registrationMethodClientIDMetadataDocument, registrationMethodDynamic:
+		if !slices.Contains(reg.RedirectURIs, redirectURI) {
+			s.log().Warn("redirect_uri does not match the client registration", "client_id", clientID, "redirect_uri", redirectURI, "registration_method", reg.RegistrationMethod)
+			s.renderAuthorizeError(w, "The redirect_uri does not match this client's registration")
+			return false
+		}
+	}
+
+	// A client that published token_endpoint_auth_method: none has no secret, so
+	// PKCE is the only thing that would bind the authorization code to it. Required
+	// only for metadata document clients: dynamically registered public clients
+	// predate this rule and automatic ones never declared an auth method at all.
+	if reg.RegistrationMethod == registrationMethodClientIDMetadataDocument && reg.TokenEndpointAuthMethod == "none" && codeChallenge == "" {
+		s.log().Warn("public client did not present a code_challenge", "client_id", clientID)
+		s.renderAuthorizeError(w, "This client is registered as public and must use PKCE")
+		return false
+	}
+	return true
+}
+
+// renderAuthorizeError reports a request that cannot be redirected back to the
+// client, so the user sees it instead.
+func (s *server) renderAuthorizeError(w http.ResponseWriter, text string) {
+	w.WriteHeader(http.StatusBadRequest)
+	renderTemplate(w, s.templates["error"], errorData{Text: text})
+}
+
 func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.NotFound(w, r)
@@ -765,16 +869,33 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 	clientID := r.Form.Get("client_id")
 	scope := r.Form.Get("scope")
 	redirectURI := r.Form.Get("redirect_uri")
-	// FIXME: Validate client_id and redirect_uri against a registered client registry.
 	state := r.Form.Get("state")
 	nonce := r.Form.Get("nonce")
 	prompt := r.Form.Get("prompt")
 	codeChallengeMethod := r.Form.Get("code_challenge_method")
 	codeChallenge := r.Form.Get("code_challenge")
 
-	s.mu.Lock()
-	s.registerClientLocked(clientID, redirectURI, scope)
-	s.mu.Unlock()
+	// RFC 7636 section 4.3: a challenge sent without a method means "plain".
+	// Defaulted here rather than at /token so that whatever is stored on the session
+	// always names a method the token endpoint knows, and so a method this IdP does
+	// not implement is refused while the user is still here to be told - rather than
+	// surfacing much later as an opaque invalid_grant on the code exchange.
+	if codeChallenge != "" {
+		if codeChallengeMethod == "" {
+			codeChallengeMethod = "plain"
+		}
+		if !slices.Contains(supportedCodeChallengeMethods, codeChallengeMethod) {
+			s.log().Warn("unsupported code_challenge_method", "client_id", clientID, "code_challenge_method", codeChallengeMethod)
+			s.renderAuthorizeError(w, "Unsupported code_challenge_method")
+			return
+		}
+	}
+
+	// Resolved before any of the three exits below - an existing session cookie,
+	// prompt=none, or the login form - so one check covers all of them.
+	if !s.resolveAuthorizeClient(w, clientID, redirectURI, scope, codeChallenge) {
+		return
+	}
 
 	reqID := uuid.NewString()
 	var sessionCookie string
@@ -1027,12 +1148,27 @@ type clientCredentials struct {
 	clientID string
 	secret   string
 	method   string
+
+	// assertion carries the RFC 7523 client_assertion when method is
+	// private_key_jwt. It is verified against the client's published keys, which
+	// may mean an outbound fetch, so never while s.mu is held.
+	assertion string
 }
 
-// parseClientCredentials reads client credentials from the Authorization header
-// (client_secret_basic) or the request body (client_secret_post), falling back to
-// "none" for public clients. The request form must already be parsed.
+// parseClientCredentials reads client credentials from an RFC 7523 client
+// assertion, the Authorization header (client_secret_basic), or the request body
+// (client_secret_post), falling back to "none" for public clients. The request
+// form must already be parsed.
 func parseClientCredentials(r *http.Request) clientCredentials {
+	// Checked first because it is the most specific signal: a client presenting an
+	// assertion is not presenting a secret in any form.
+	if r.Form.Get("client_assertion_type") == privateKeyJWTAssertionType {
+		return clientCredentials{
+			clientID:  r.Form.Get("client_id"),
+			method:    "private_key_jwt",
+			assertion: r.Form.Get("client_assertion"),
+		}
+	}
 	// RFC 6749 section 2.3.1 wants the Basic credentials form-urlencoded before
 	// base64. Client IDs are UUIDs and secrets are base64url here, so nothing this
 	// IdP issues needs that decoding step.
@@ -1045,25 +1181,69 @@ func parseClientCredentials(r *http.Request) clientCredentials {
 	return clientCredentials{clientID: r.Form.Get("client_id"), method: "none"}
 }
 
-// authenticateClientLocked verifies presented credentials against the stored
-// registration for clientID. Only dynamically registered confidential clients are
-// enforced: those are the ones this IdP issued a secret to and whose declared auth
-// method it can trust. Callers must hold s.mu.
-func (s *server) authenticateClientLocked(clientID string, creds clientCredentials) error {
+// authenticateClient verifies presented credentials against the stored
+// registration for clientID. Only clients that told this IdP how they authenticate
+// are enforced: the ones it issued a secret to (dynamic) and the ones that
+// published their own keys (client_id_metadata_document).
+//
+// The registration lookup takes s.mu; the verification that follows must not hold
+// it, because a private_key_jwt assertion may need a jwks_uri fetched. Callers
+// must therefore not hold s.mu either.
+func (s *server) authenticateClient(clientID string, creds clientCredentials) error {
+	s.mu.Lock()
 	reg, known := s.clients[clientID]
-	if !known || reg.RegistrationMethod != registrationMethodDynamic {
+	s.mu.Unlock()
+
+	if !known {
+		return nil
+	}
+	switch reg.RegistrationMethod {
+	case registrationMethodDynamic:
+	case registrationMethodClientIDMetadataDocument:
+		// s.clients holds the last document this IdP saw and never expires it, while
+		// the refresh_token grant never passes through /authorize. Without this the
+		// keys a client published once would keep authenticating it for the life of a
+		// refresh token, long after the client withdrew them. resolveClientIDMetadata
+		// serves the cache whenever it is still live, so this costs one fetch per TTL.
+		refreshed, err := s.resolveClientIDMetadata(clientID)
+		switch {
+		case err == nil:
+			reg = refreshed
+		case reg.TokenEndpointAuthMethod == "private_key_jwt":
+			// A client that authenticates with keys cannot be authenticated against a
+			// document this IdP can no longer read: falling back to the cached copy is
+			// exactly the revocation bypass this re-resolution exists to close.
+			return fmt.Errorf("could not re-resolve client id metadata document: %w", err)
+		default:
+			// A public client proves nothing here either way, so an unreachable
+			// document costs it no security - and failing its token request would be a
+			// self-inflicted outage.
+			s.log().Warn("could not re-resolve client id metadata document, continuing on the cached registration",
+				"client_id", clientID, "token_endpoint_auth_method", reg.TokenEndpointAuthMethod, "error", err.Error())
+		}
+	default:
 		// FIXME: Authenticate automatically registered clients. This IdP holds no
 		// secret for them and cannot tell a legitimate client from an impostor, so
 		// anyone presenting a valid code or refresh token is served.
 		return nil
 	}
-	if reg.TokenEndpointAuthMethod == "none" {
+	if reg.TokenEndpointAuthMethod == "" || reg.TokenEndpointAuthMethod == "none" {
 		// A public client authenticates nothing; PKCE is the only binding.
 		return nil
 	}
 	if creds.method != reg.TokenEndpointAuthMethod {
 		return fmt.Errorf("client registered with %s but presented %s", reg.TokenEndpointAuthMethod, creds.method)
 	}
+
+	if reg.TokenEndpointAuthMethod == "private_key_jwt" {
+		// RFC 7523 makes a request-level client_id optional, since the assertion
+		// names the client itself; when one is sent it still has to agree.
+		if creds.clientID != "" && creds.clientID != clientID {
+			return fmt.Errorf("credentials are for client %q, grant is for client %q", creds.clientID, clientID)
+		}
+		return s.verifyPrivateKeyJWT(clientID, reg, creds.assertion)
+	}
+
 	if creds.clientID != clientID {
 		return fmt.Errorf("credentials are for client %q, grant is for client %q", creds.clientID, clientID)
 	}
@@ -1246,9 +1426,7 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	// Authentication runs after the grant so that clientID comes from server-side
 	// state. An authorization code is already consumed at this point, which makes a
 	// failed attempt burn the code - the safe direction for a one-time credential.
-	s.mu.Lock()
-	authErr := s.authenticateClientLocked(clientID, creds)
-	s.mu.Unlock()
+	authErr := s.authenticateClient(clientID, creds)
 	if authErr != nil {
 		s.log().Warn("get-token client authentication failed", "client_id", clientID, "error", authErr.Error())
 		writeClientAuthError(w, creds.method)
@@ -1486,22 +1664,26 @@ func (s *server) openidConfiguration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	config := map[string]any{
-		"issuer":                                         s.externalURL,
-		"authorization_endpoint":                         s.externalURL + "/authorize",
-		"token_endpoint":                                 s.externalURL + "/token",
-		"userinfo_endpoint":                              s.externalURL + "/userinfo",
-		"jwks_uri":                                       s.externalURL + "/.well-known/jwks.json",
-		"end_session_endpoint":                           s.externalURL + "/endsession",
-		"response_types_supported":                       []string{"code"},
-		"subject_types_supported":                        []string{s.subjectType},
-		"id_token_signing_alg_values_supported":          []string{"RS256"},
-		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
-		"code_challenge_methods_supported":               []string{"S256", "plain"},
-		"scopes_supported":                               []string{"openid", "profile", "email", "offline_access"},
-		"claims_supported":                               []string{"sub", "name", "picture", "email", "email_verified"},
-		"registration_endpoint":                          s.externalURL + "/register",
-		"token_endpoint_auth_methods_supported":          supportedTokenEndpointAuthMethods,
-		"authorization_response_iss_parameter_supported": true,
+		"issuer":                                           s.externalURL,
+		"authorization_endpoint":                           s.externalURL + "/authorize",
+		"token_endpoint":                                   s.externalURL + "/token",
+		"userinfo_endpoint":                                s.externalURL + "/userinfo",
+		"jwks_uri":                                         s.externalURL + "/.well-known/jwks.json",
+		"end_session_endpoint":                             s.externalURL + "/endsession",
+		"response_types_supported":                         []string{"code"},
+		"subject_types_supported":                          []string{s.subjectType},
+		"id_token_signing_alg_values_supported":            []string{"RS256"},
+		"grant_types_supported":                            []string{"authorization_code", "refresh_token"},
+		"code_challenge_methods_supported":                 supportedCodeChallengeMethods,
+		"scopes_supported":                                 []string{"openid", "profile", "email", "offline_access"},
+		"claims_supported":                                 []string{"sub", "name", "picture", "email", "email_verified"},
+		"registration_endpoint":                            s.externalURL + "/register",
+		"token_endpoint_auth_methods_supported":            advertisedTokenEndpointAuthMethods,
+		"token_endpoint_auth_signing_alg_values_supported": advertisedTokenEndpointAuthSigningAlgs,
+		"authorization_response_iss_parameter_supported":   true,
+		// draft-ietf-oauth-client-id-metadata-document-02 section 6, so a client can
+		// tell before sending a user here that a URL client_id will be dereferenced.
+		"client_id_metadata_document_supported": true,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
